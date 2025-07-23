@@ -10,7 +10,8 @@ use std::num::NonZeroU32;
 use std::ops::{Div, Mul};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::MouseScrollDelta::LineDelta;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::platform::windows::{BackdropType, WindowAttributesExtWindows};
 use winit::raw_window_handle::HasDisplayHandle;
@@ -28,6 +29,7 @@ struct App {
 struct PanningData {
     panning: bool,
     pan_offset: PhysicalPosition<i32>,
+    zoom_level: i32,
 }
 #[derive(Copy, Clone, Default, Debug)]
 struct Size {
@@ -35,6 +37,16 @@ struct Size {
     height: u32,
 }
 
+/// Calculates the maximum buffer size for an image based on the window dimensions and image size.
+/// More specifically, the buffer size created is the aspect ratio of the window (to make sure the buffer always completely fills the window frame) but it is the physical pixel size of the image to maximize image space.
+///
+/// # Arguments
+/// * `width` - The width of the window.
+/// * `height` - The height of the window.
+/// * `img_size` - The size of the image.
+///
+/// # Returns
+/// A `Size` struct representing the new dimensions of the buffer.
 fn calculate_max_buffer_size(width: u32, height: u32, img_size: Size) -> Size {
     if width > height {
          /*
@@ -83,11 +95,20 @@ fn rgba_transparent_generator() -> Rgba {
     // Rgba::new(255_u8, 0_u8, 0_u8, 255_u8) // red padding (debug)
 }
 
-fn pad_img(img: PhotonImage, old_size: Size, new_size: Size) -> PhotonImage {
+/// Pads an image to fit within new dimensions.
+///
+/// # Arguments
+/// * `img` - The original image to be padded.
+/// * `old_size` - The original size of the image.
+/// * `new_size` - The new size to pad the image to.
+///
+/// # Returns
+/// A new `PhotonImage` instance with the applied padding.
+fn pad_img(img: PhotonImage, new_size: Size) -> PhotonImage {
     
     
-    let total_pad_vertical = new_size.height - old_size.height;
-    let total_pad_horizontal = new_size.width - old_size.width;
+    let total_pad_vertical = new_size.height - img.get_height();
+    let total_pad_horizontal = new_size.width - img.get_width();
     
     let pad_left;
     let pad_right;
@@ -107,8 +128,9 @@ fn pad_img(img: PhotonImage, old_size: Size, new_size: Size) -> PhotonImage {
         pad_top = 0;
         pad_bottom = 0;
     }
-    
-    
+
+    let start_time = std::time::Instant::now();
+
     let new_img = 
         padding_left(
             &padding_right(
@@ -119,9 +141,21 @@ fn pad_img(img: PhotonImage, old_size: Size, new_size: Size) -> PhotonImage {
                     pad_bottom, rgba_transparent_generator()),
                 pad_right, rgba_transparent_generator()),
             pad_left, rgba_transparent_generator());
+    
+
+    println!("paddingInThePadding Time: {:?}", start_time.elapsed());
+
     new_img
 }
 
+/// Applies panning to an image based on the provided panning data.
+///
+/// # Arguments
+/// * `img` - The original image to be panned.
+/// * `panning_data` - The data containing panning state and offset.
+///
+/// # Returns
+/// A new `PhotonImage` instance with the applied panning.
 fn pan_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
     let pan_offset_x = panning_data.pan_offset.x;
     let pan_offset_y = panning_data.pan_offset.y;
@@ -136,7 +170,7 @@ fn pan_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
     // get size of original image
     let img_size = Size{width: img.get_width(), height: img.get_height()};
     
-    dbg!((pan_offset_x,pan_offset_x_abs),(pan_offset_y,pan_offset_y_abs));
+    // dbg!((pan_offset_x,pan_offset_x_abs),(pan_offset_y,pan_offset_y_abs));
     
     //define corner vars
     let (pos_x, pos_y, neg_x, neg_y);
@@ -177,8 +211,18 @@ fn pan_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
     }
 
     dbg!(pos_x, neg_x, pos_y, neg_y);
-    let cropped_img = photon_rs::transform::crop(img, neg_x, neg_y, pos_x, pos_y);
+    // if zoomed out, find zoom level and adjust crop to fit.
     
+    let cropped_img = photon_rs::transform::crop(img, neg_x, neg_y, pos_x, pos_y);
+
+    let padded_cropped_img = pad_img_sides(cropped_img, pad_left, pad_right, pad_top, pad_bottom);
+    
+
+    
+    padded_cropped_img
+}
+
+fn pad_img_sides (cropped_img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32, pad_bottom: u32) -> PhotonImage {
     let padded_cropped_img =
         padding_left(
             &padding_right(
@@ -189,10 +233,57 @@ fn pan_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
                     pad_bottom, rgba_transparent_generator()),
                 pad_right, rgba_transparent_generator()),
             pad_left, rgba_transparent_generator());
-    
-
-    
     padded_cropped_img
+}
+
+/// Applies zooming to an image based on the provided panning data.
+///
+/// # Arguments
+/// * `img` - The original image to be zoomed.
+/// * `panning_data` - The data containing the zoom level.
+///
+/// # Returns
+/// A new `PhotonImage` instance with the applied zoom.
+fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
+    let zoom_level = panning_data.zoom_level;
+    
+    // zoom level should be so that 10 zooms gets you to one pixel
+    let zoom_level_multiplier = 
+        if img.get_height() > img.get_width() {
+            // use width
+            img.get_width()/10    
+        } else {
+            // use height
+            img.get_height()/10
+        };
+
+    let zoom_constant = zoom_level.unsigned_abs() * zoom_level_multiplier / 2;
+
+    // dbg!(zoom_constant);
+    
+    let zoomed_img;
+    if zoom_level.is_positive() {
+        let mut pos_x = img.get_width();
+        let mut pos_y = img.get_height();
+        let mut neg_x = 0;
+        let mut neg_y= 0;
+        
+        pos_x -= zoom_constant;
+        pos_y -= zoom_constant;
+        neg_x += zoom_constant;
+        neg_y += zoom_constant;
+        
+        // dbg!(pos_x, neg_x, pos_y, neg_y);
+        zoomed_img = photon_rs::transform::crop(&img, neg_x, neg_y, pos_x, pos_y);
+    } else {
+        let pad_top = zoom_constant;
+        let pad_bottom = zoom_constant;
+        let pad_left = zoom_constant;
+        let pad_right = zoom_constant;
+        // dbg!(pad_top);
+        zoomed_img = pad_img_sides(img, pad_left, pad_right, pad_top, pad_bottom);
+    }
+    zoomed_img
 }
 
 impl ApplicationHandler for App {
@@ -255,6 +346,31 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(..) => {
                 self.panning_data.pan_offset = PhysicalPosition::new(0, 0);
+                self.panning_data.zoom_level = 0;
+            }
+            WindowEvent::MouseWheel {delta, ..} => {
+                dbg!(delta);
+                
+                let max_zoom_level = 10;
+                match delta {
+                    LineDelta(x, y) => {
+                        if y.is_sign_positive() {
+                            if self.panning_data.zoom_level < max_zoom_level {
+                                self.panning_data.zoom_level += 1;
+                            }
+                        } else {
+                            if self.panning_data.zoom_level > -max_zoom_level {
+                                self.panning_data.zoom_level -= 1;
+                            }
+                        }
+                        dbg!(self.panning_data.zoom_level);
+                    }
+                    MouseScrollDelta::PixelDelta(position) => {
+                        // TODO: add this
+                        // or dont it only affects trackpad users
+                    }
+                }
+                window_ref.request_redraw();
             }
             
             WindowEvent::CursorMoved {position, .. } => {
@@ -285,13 +401,16 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
+                let start_time = std::time::Instant::now();
                 // setup
                 let display = window_ref.display_handle().unwrap();
                 let context = Context::new(display).unwrap();
                 let mut surface = Surface::new(&context,window_ref)
                     .expect("error in surface definition");
-                
-                
+                println!("Setup time: {:?}", start_time.elapsed());
+                let start_time = std::time::Instant::now();
+
+
                 // define widths and heights
                 let window_width = window_ref.inner_size().width;
                 let window_height = window_ref.inner_size().height;
@@ -300,18 +419,48 @@ impl ApplicationHandler for App {
                     height: window_height,
                 };
                 
-                let original_img_size = Size{
-                    width: self.img.as_ref().unwrap().get_width(),
-                    height: self.img.as_ref().unwrap().get_height(),
-                };
-                let new_img_size = calculate_max_buffer_size(window_width, window_height, original_img_size.clone());
+                
                 
                 // resize everything
                 surface.resize(NonZeroU32::try_from(window_width).unwrap(), NonZeroU32::try_from(window_height).unwrap()).unwrap(); // resize buffer
-                let panned_img = pan_img(self.img.as_ref().unwrap(), self.panning_data); // pan image
-                let resized_img = resize(&panned_img, new_img_size.width, new_img_size.height, SamplingFilter::Nearest); // resize image
-                let padded_img = pad_img(resized_img, new_img_size, window_size); // pad image
+
+                println!("Surface resize time: {:?}", start_time.elapsed());
+                let start_time = std::time::Instant::now();
+
+
+                let start_img = self.img.as_ref().unwrap().clone();
                 
+                
+                
+                
+                let middle_img = if self.panning_data.zoom_level <= 0 {
+                    // if zoomed out, perform the zooming then the panning, otherwise, do panning then zooming
+                    let zoomed_img = zoom_img(start_img, self.panning_data); // zoom image
+                    let panned_img = pan_img(&zoomed_img, self.panning_data); // pan image
+                    panned_img
+                } else {
+                    let panned_img = pan_img(&start_img, self.panning_data); // pan image
+                    let zoomed_img = zoom_img(panned_img, self.panning_data); // zoom image
+                    zoomed_img
+                };
+
+                println!("Zoom and pan time: {:?}", start_time.elapsed());
+                let start_time = std::time::Instant::now();
+
+
+                let original_img_size = Size{ width: middle_img.get_width(), height: middle_img.get_height(), };
+                let new_img_size = calculate_max_buffer_size(window_width, window_height, original_img_size);
+                println!("Calc max buffer time: {:?}", start_time.elapsed());
+                let start_time = std::time::Instant::now();
+
+                let resized_img = resize(&middle_img, new_img_size.width, new_img_size.height, SamplingFilter::Nearest); // resize image
+                println!("Resize time: {:?}", start_time.elapsed());
+                let start_time = std::time::Instant::now();
+
+                let padded_img = pad_img(resized_img, window_size); // pad image
+                println!("Padding time: {:?}", start_time.elapsed());
+                let start_time = std::time::Instant::now();
+
                 let mut buffer = surface.buffer_mut().unwrap();
                 let raw_pixel_vec = padded_img.get_raw_pixels();
                 let raw_pixel_slice = raw_pixel_vec.as_slice();
@@ -319,8 +468,10 @@ impl ApplicationHandler for App {
                 buffer.copy_from_slice(casted_pixel_slice);
                 
                 window_ref.pre_present_notify();
-                buffer.present().unwrap()
-                
+                buffer.present().unwrap();
+                println!("Buffer copy and present time: {:?}", start_time.elapsed());
+
+
             }
             _ => (),
         }
