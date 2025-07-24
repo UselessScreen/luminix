@@ -6,13 +6,13 @@ build = "build.rs"
 
 [dependencies]
 winit = "0.30.11"
-image = "0.25.6"
 photon-rs = "0.3.3"
 softbuffer = "0.4.6"
 bytemuck = "1.23.0"
 fraction = "0.15.3"
 fast_image_resize = { version = "5.2.0", features = ["image"] }
 rayon = "1.10.0"
+image = "0.25.6"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

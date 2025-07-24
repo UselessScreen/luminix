@@ -1,14 +1,17 @@
 use bytemuck::cast_slice;
 use fast_image_resize::images::Image;
 use fast_image_resize::{IntoImageView, PixelType, ResizeAlg, ResizeOptions, Resizer, SrcCropping};
-use fraction::{Fraction, Integer, ToPrimitive, Zero};
+use fraction::{Integer, Zero};
+use image::{AnimationDecoder, ImageFormat};
 use photon_rs;
 use photon_rs::{PhotonImage, Rgba};
+use rayon::iter::ParallelIterator;
 use softbuffer;
 use softbuffer::{Context, Surface};
-use std::env;
+use std::io::BufReader;
 use std::num::NonZeroU32;
-use std::ops::{Div, Mul};
+use std::ops::Div;
+use std::{env, time};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::MouseScrollDelta::LineDelta;
@@ -24,6 +27,7 @@ struct App {
     window: Option<Box<Window>>,
     // pixels: Option<Pixels<'static>>,
     img: Option<PhotonImage>,
+    gif_frames: Option<Vec<PhotonImage>>, // Store GIF frames
     panning_data: PanningData,
 }
 
@@ -39,6 +43,28 @@ struct Size {
     height: u32,
 }
 
+fn fast_resize_photon_img(img: &PhotonImage, new_img_size: Size) -> PhotonImage {
+    let dyn_img = photon_rs::helpers::dyn_image_from_raw(&img);
+    let src_img = Image::from_vec_u8(img.get_width(), img.get_height(), dyn_img.into_bytes(), PixelType::U8x4).expect("aasdsad");
+    let mut dst_image = Image::new(
+        new_img_size.width,
+        new_img_size.height,
+        src_img.pixel_type(),
+    );
+
+
+    let mut resizer = Resizer::new();
+
+    resizer.resize(&src_img, &mut dst_image, &ResizeOptions { algorithm: ResizeAlg::Nearest, cropping: SrcCropping::None, mul_div_alpha: true }).unwrap();
+
+    let width = dst_image.width();
+    let height = dst_image.height();
+
+    let resized_img = PhotonImage::new(dst_image.into_vec(), width, height);
+    resized_img
+}
+
+
 /// Calculates the maximum buffer size for an image based on the window dimensions and image size.
 /// More specifically, the buffer size created is the aspect ratio of the window (to make sure the buffer always completely fills the window frame) but it is the physical pixel size of the image to maximize image space.
 ///
@@ -49,34 +75,51 @@ struct Size {
 ///
 /// # Returns
 /// A `Size` struct representing the new dimensions of the buffer.
-fn calculate_max_buffer_size(width: u32, height: u32, img_size: Size) -> Size {
-    if width > height {
-         /*
-         +--------+
-         |        |
-         +--------+
-          */
-        let aspect_ratio = Fraction::new(img_size.width, img_size.height);
-        let new_width = aspect_ratio.mul(height);
-        let new_width = new_width.to_u64().expect("failed to convert fraction back to number").to_u32().unwrap();
-
-        Size{
-            width: new_width,
-            height,
+fn calculate_max_buffer_size(window_width: u32, window_height: u32, img_size: Size) -> Size {
+    let window_width_f= window_width as f64;
+    let window_height_f = window_height as f64;
+    let img_width_f = img_size.width as f64;
+    let img_height_f = img_size.height as f64;
+    
+    
+    if img_size.width == 0 || img_size.height == 0 {
+        // Avoid division by zero
+        return Size { width: window_width, height: window_height };
+    }
+    // if window_width > window_height {
+    if (img_width_f / img_height_f) < (window_width_f / window_height_f) {
+        /*
+        +--------+
+        |        |
+        +--------+
+         */
+        let aspect_ratio = img_width_f / img_height_f;
+        // dbg!(aspect_ratio);
+        let new_width = aspect_ratio * window_height_f;
+        let new_width = new_width as u32;
+        if new_width == 0 {
+            return Size { width: window_width, height: window_height };
         }
-    } else if width < height {
+        Size {
+            width: new_width,
+            height: window_height,
+        }
+        // } else if window_width < window_height {
+    } else if (img_width_f / img_height_f) > (window_width_f / window_height_f) {
         /*
         +--+
         |  |
         |  |
         +--+
          */
-        let aspect_ratio = Fraction::new(img_size.height, img_size.width);
-        let new_height = aspect_ratio.mul(width);
-        let new_height = new_height.to_u64().expect("failed to convert fraction back to number").to_u32().unwrap();
-
-        Size{
-            width,
+        let aspect_ratio = img_height_f / img_width_f;
+        let new_height = aspect_ratio * window_width_f;
+        let new_height = new_height as u32;
+        if new_height == 0 {
+            return Size { width: window_width, height: window_height };
+        }
+        Size {
+            width: window_width,
             height: new_height,
         }
     } else {
@@ -86,8 +129,8 @@ fn calculate_max_buffer_size(width: u32, height: u32, img_size: Size) -> Size {
         +----+
          */
         Size {
-            width,
-            height,
+            width: window_width,
+            height: window_height,
         }
     }
 }
@@ -108,7 +151,7 @@ fn rgba_transparent_generator() -> Rgba {
 /// A new `PhotonImage` instance with the applied padding.
 fn pad_img(img: PhotonImage, new_size: Size) -> PhotonImage {
     
-    
+
     let total_pad_vertical = new_size.height - img.get_height();
     let total_pad_horizontal = new_size.width - img.get_width();
     
@@ -130,22 +173,8 @@ fn pad_img(img: PhotonImage, new_size: Size) -> PhotonImage {
         pad_top = 0;
         pad_bottom = 0;
     }
-
-    let start_time = std::time::Instant::now();
-
-    // let new_img = 
-    //     padding_left(
-    //         &padding_right(
-    //             &padding_bottom(
-    //                 &padding_top(
-    //                     &img,
-    //                     pad_top, rgba_transparent_generator()),
-    //                 pad_bottom, rgba_transparent_generator()),
-    //             pad_right, rgba_transparent_generator()),
-    //         pad_left, rgba_transparent_generator());
+    
     let new_img = pad_img_sides(img, pad_left, pad_right, pad_top, pad_bottom);
-
-    println!("paddingInThePadding Time: {:?}", start_time.elapsed());
 
     new_img
 }
@@ -158,7 +187,9 @@ fn pad_img(img: PhotonImage, new_size: Size) -> PhotonImage {
 ///
 /// # Returns
 /// A new `PhotonImage` instance with the applied panning.
-fn pan_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
+fn pan_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
+    let pan_time = time::Instant::now();
+    let pan_math_time = time::Instant::now();
     let pan_offset_x = panning_data.pan_offset.x;
     let pan_offset_y = panning_data.pan_offset.y;
 
@@ -212,16 +243,47 @@ fn pan_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
         pad_bottom = pan_offset_y_abs;
     }
 
-    dbg!(pos_x, neg_x, pos_y, neg_y);
-    // if zoomed out, find zoom level and adjust crop to fit.
-    
-    let cropped_img = photon_rs::transform::crop(img, neg_x, neg_y, pos_x, pos_y);
+    // dbg!(pos_x, neg_x, pos_y, neg_y);
+    println!("|   |   Pan math time: {:?}", pan_math_time.elapsed());
+    let pan_math_time = time::Instant::now();
+
+
+    let cropped_img = fast_crop(img, pos_x, pos_y, neg_x, neg_y);
+    println!("|   |   Pan crop time: {:?}", pan_math_time.elapsed());
+    let pan_math_time = time::Instant::now();
+
+    // let cropped_img = photon_rs::transform::crop(img, neg_x, neg_y, pos_x, pos_y);
 
     let padded_cropped_img = pad_img_sides(cropped_img, pad_left, pad_right, pad_top, pad_bottom);
-    
+    println!("|   |   Pan pad time: {:?}", pan_math_time.elapsed());
 
-    
+    println!("|  Pan time: {:?}", pan_time.elapsed());
     padded_cropped_img
+}
+
+fn fast_crop(img: PhotonImage, pos_x: u32, pos_y: u32, neg_x: u32, neg_y: u32) -> PhotonImage {
+    let new_img_size = Size {
+        width: pos_x - neg_x,
+        height: pos_y - neg_y,
+    };
+
+    let dyn_img = photon_rs::helpers::dyn_image_from_raw(&img);
+    let src_img = Image::from_vec_u8(img.get_width(), img.get_height(), dyn_img.into_bytes(), PixelType::U8x4).expect("aasdsad");
+    let mut dst_image = Image::new(
+        new_img_size.width,
+        new_img_size.height,
+        src_img.pixel_type(),
+    );
+
+    let mut resizer = Resizer::new();
+
+    resizer.resize(&src_img, &mut dst_image, &ResizeOptions::new().resize_alg(ResizeAlg::Nearest).crop(neg_x as _, neg_y as _, new_img_size.width as _, new_img_size.height as _)).unwrap();
+
+    let width = dst_image.width();
+    let height = dst_image.height();
+
+    let cropped_img = PhotonImage::new(dst_image.into_vec(), width, height);
+    cropped_img
 }
 
 fn pad_img_sides (img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32, pad_bottom: u32) -> PhotonImage {
@@ -290,7 +352,7 @@ fn pad_img_sides (img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32,
 fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
     let zoom_level = panning_data.zoom_level;
     
-    // zoom level should be so that 10 zooms gets you to one pixel
+    // zoom level should be so that 10 zooms gets you to around one pixel
     let zoom_level_multiplier = 
         if img.get_height() > img.get_width() {
             // use width
@@ -301,23 +363,56 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
         };
 
     let zoom_constant = zoom_level.unsigned_abs() * zoom_level_multiplier / 2;
-
+    // dbg!(zoom_constant, zoom_level_multiplier);
     // dbg!(zoom_constant);
+    
+    
+    
+    
     
     let zoomed_img;
     if zoom_level.is_positive() {
-        let mut pos_x = img.get_width();
-        let mut pos_y = img.get_height();
-        let mut neg_x = 0;
-        let mut neg_y= 0;
-        
-        pos_x -= zoom_constant;
-        pos_y -= zoom_constant;
-        neg_x += zoom_constant;
-        neg_y += zoom_constant;
-        
+        // let pos_x = img.get_width() - zoom_constant;
+        // let pos_y = img.get_height() - zoom_constant;
+        // let neg_x = zoom_constant;
+        // let neg_y= zoom_constant;
+        // 
         // dbg!(pos_x, neg_x, pos_y, neg_y);
-        zoomed_img = photon_rs::transform::crop(&img, neg_x, neg_y, pos_x, pos_y);
+        // zoomed_img = fast_crop(img, pos_x, pos_y, neg_x, neg_y);
+
+        let zoom_ratio = zoom_level as f32 / 10f32; // 0.0 - 1.0
+        // total percent to crop, e.g. 0.3 means remove 30% total (15% per side)
+        let crop_ratio = 0.8 * zoom_ratio; // up to 80% total crop
+
+        let aspect = img.get_width() as f32 / img.get_height() as f32;
+        
+        let base_crop_width = img.get_width() as f32 * crop_ratio;
+        let base_crop_height = img.get_height() as f32 * crop_ratio;
+
+        // adjust one dimension to maintain aspect ratio
+        let (crop_width, crop_height) = if aspect >= 1.0 {
+            // wide image
+            let h = img.get_height() as f32 - base_crop_height;
+            let w = h * aspect;
+            (w, h)
+        } else {
+            // tall image
+            let w = img.get_width() as f32 - base_crop_width;
+            let h = w / aspect;
+            (w, h)
+        };
+
+        let center_x = img.get_width() as f32 / 2.0;
+        let center_y = img.get_height() as f32 / 2.0;
+
+        let x0 = (center_x - crop_width / 2.0).max(0.0);
+        let y0 = (center_y - crop_height / 2.0).max(0.0);
+
+        let x1 = (x0 + crop_width).min(img.get_width() as f32);
+        let y1 = (y0 + crop_height).min(img.get_height() as f32);
+        
+        zoomed_img = fast_crop(img, x1 as u32, y1 as u32, x0 as u32, y0 as u32)
+        
     } else {
         let pad_top = zoom_constant;
         let pad_bottom = zoom_constant;
@@ -337,7 +432,42 @@ impl ApplicationHandler for App {
         let image_path = &args[1];
         dbg!(image_path);
         // loading image -- load image with image crate
-        let img = photon_rs::native::open_image(image_path).expect("failed to load image");
+        let img_reader = image::ImageReader::open(image_path).unwrap();
+        let format = img_reader.with_guessed_format().unwrap().format().unwrap();
+        if format == ImageFormat::Gif {
+            // Load GIF and extract frames
+            let gif_reader = image::codecs::gif::GifDecoder::new(BufReader::new(std::fs::File::open(image_path).unwrap())).unwrap();
+            let frames = gif_reader.into_frames();
+            let frames = frames.collect_frames().expect("Failed to collect GIF frames");
+            let photon_frames: Vec<PhotonImage> = frames.iter().map(|frame| {
+                let dyn_img = image::DynamicImage::ImageRgba8(frame.buffer().clone());
+                let rgba = dyn_img.to_rgba8().into_raw();
+                let mut photon_img = PhotonImage::new(rgba, frame.buffer().width(), frame.buffer().height());
+                photon_rs::channels::swap_channels(&mut photon_img, 0, 2);
+                photon_img
+            }).collect();
+            println!("this is gif");
+            if let Some(first_frame) = photon_frames.first() {
+                let (img_width, img_height) = (first_frame.get_width(), first_frame.get_height());
+                dbg!(img_width, img_height);
+                let window_attributes = Window::default_attributes()
+                    .with_min_inner_size(LogicalSize::new(img_width, img_height))
+                    .with_inner_size(LogicalSize::new(img_width, img_height))
+                    .with_active(true)
+                    .with_transparent(true)
+                    .with_title(format!("luminix ({image_path})"))
+                    .with_window_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok())
+                    .with_system_backdrop(BackdropType::TransientWindow);
+                let window = Box::new(event_loop.create_window(window_attributes).unwrap());
+                self.window = Some(window);
+                self.gif_frames = Some(photon_frames.clone()); // Use clone to avoid move error
+                self.img = Some(first_frame.clone()); // Display first frame by default
+            }
+            return;
+        }
+        let mut img = photon_rs::native::open_image(image_path).expect("failed to load image");
+        photon_rs::channels::swap_channels(&mut img, 0, 2);
+        
         let (img_width, img_height) = (img.get_width(), img.get_height());
         dbg!(img_width, img_height);
         
@@ -371,7 +501,7 @@ impl ApplicationHandler for App {
             },
             
             WindowEvent::MouseInput {state, button, .. } => {
-                dbg!(button, state);
+                // dbg!(button, state);
                 
                 if button == MouseButton::Middle { 
                     match state {
@@ -409,9 +539,9 @@ impl ApplicationHandler for App {
                                 self.panning_data.zoom_level -= 1;
                             }
                         }
-                        dbg!(self.panning_data.zoom_level);
+                        // dbg!(self.panning_data.zoom_level);
                     }
-                    MouseScrollDelta::PixelDelta(position) => {
+                    MouseScrollDelta::PixelDelta(_) => {
                         // TODO: add this
                         // or dont it only affects trackpad users
                     }
@@ -438,7 +568,7 @@ impl ApplicationHandler for App {
                         self.panning_data.pan_offset.y += offset_y;
                     }
                     
-                    dbg!(self.panning_data);
+                    // dbg!(self.panning_data);
                     window_ref.request_redraw();
                     // dbg!((offset_x,offset_y));
                     
@@ -483,51 +613,45 @@ impl ApplicationHandler for App {
                 let middle_img = if self.panning_data.zoom_level <= 0 {
                     // if zoomed out, perform the zooming then the panning, otherwise, do panning then zooming
                     let zoomed_img = zoom_img(start_img, self.panning_data); // zoom image
-                    let panned_img = pan_img(&zoomed_img, self.panning_data); // pan image
+                    // println!("zoom - pan");
+                    // dbg!((zoomed_img.get_width(), zoomed_img.get_height()));
+                    let panned_img = pan_img(zoomed_img, self.panning_data); // pan image
                     panned_img
                 } else {
-                    let panned_img = pan_img(&start_img, self.panning_data); // pan image
-                    let zoomed_img = zoom_img(panned_img, self.panning_data); // zoom image
+                    let panned_img = pan_img(start_img, self.panning_data); // pan image
+                    let zoomed_img = zoom_img(panned_img.clone(), self.panning_data); // zoom image
+                    // println!("pan - zoom");
+                    // dbg!((zoomed_img.get_width(), zoomed_img.get_height()));
+                    // dbg!((panned_img.get_width(), panned_img.get_height()));
                     zoomed_img
                 };
 
                 println!("Zoom and pan time: {:?}", start_time.elapsed());
-                let start_time = std::time::Instant::now();
+                let start_time = time::Instant::now();
 
 
                 let original_img_size = Size{ width: middle_img.get_width(), height: middle_img.get_height(), };
+                // dbg!(original_img_size);
                 let new_img_size = calculate_max_buffer_size(window_width, window_height, original_img_size);
+                // dbg!(new_img_size);
+                // dbg!(Size{width: window_width, height:window_height,});
+                
                 println!("Calc max buffer time: {:?}", start_time.elapsed());
-                let start_time = std::time::Instant::now();
+                let start_time = time::Instant::now();
 
-                let dyn_img = photon_rs::helpers::dyn_image_from_raw(&middle_img);
-                let src_img = Image::from_vec_u8(middle_img.get_width(), middle_img.get_height(), dyn_img.into_bytes(), PixelType::U8x4).expect("aasdsad");
-                let mut dst_image = Image::new(
-                    new_img_size.width,
-                    new_img_size.height,
-                    src_img.pixel_type(),
-                );
-                
-                
-                let mut resizer = Resizer::new();
-                
-                resizer.resize(&src_img, &mut dst_image, &ResizeOptions {algorithm:ResizeAlg::Nearest,cropping:SrcCropping::None,mul_div_alpha:true}).unwrap();
-                
-                let width = dst_image.width();
-                let height = dst_image.height();
-                
-                let resized_img = PhotonImage::new(dst_image.into_vec(), width, height);
+
+                let resized_img = fast_resize_photon_img(&middle_img, new_img_size);
                 
                 // let resized_img = resize(&middle_img, new_img_size.width, new_img_size.height, SamplingFilter::Nearest); // resize image
                 println!("Resize time: {:?}", start_time.elapsed());
-                let start_time = std::time::Instant::now();
+                let start_time = time::Instant::now();
 
                 let padded_img = pad_img(resized_img, window_size); // pad image
                 println!("Padding time: {:?}", start_time.elapsed());
-                let start_time = std::time::Instant::now();
+                let start_time = time::Instant::now();
 
                 let mut buffer = surface.buffer_mut().unwrap();
-                let raw_pixel_vec = padded_img.get_raw_pixels();
+                let mut raw_pixel_vec = padded_img.get_raw_pixels();
                 let raw_pixel_slice = raw_pixel_vec.as_slice();
                 let casted_pixel_slice = cast_slice::<u8, u32>(raw_pixel_slice);
                 buffer.copy_from_slice(casted_pixel_slice);
@@ -543,7 +667,6 @@ impl ApplicationHandler for App {
         }
     }
 }
-
 
 
 fn main() {
