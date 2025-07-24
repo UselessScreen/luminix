@@ -1,7 +1,8 @@
 use bytemuck::cast_slice;
+use fast_image_resize::images::Image;
+use fast_image_resize::{IntoImageView, PixelType, ResizeAlg, ResizeOptions, Resizer, SrcCropping};
 use fraction::{Fraction, Integer, ToPrimitive, Zero};
 use photon_rs;
-use photon_rs::transform::{padding_bottom, padding_left, padding_right, padding_top, resize, SamplingFilter};
 use photon_rs::{PhotonImage, Rgba};
 use softbuffer;
 use softbuffer::{Context, Surface};
@@ -9,13 +10,14 @@ use std::env;
 use std::num::NonZeroU32;
 use std::ops::{Div, Mul};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::MouseScrollDelta::LineDelta;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::platform::windows::{BackdropType, WindowAttributesExtWindows};
+use winit::platform::windows::{BackdropType, IconExtWindows, WindowAttributesExtWindows};
 use winit::raw_window_handle::HasDisplayHandle;
-use winit::window::{Window, WindowButtons, WindowId};
+use winit::window::{Icon, Window, WindowId};
+
 
 #[derive(Default)]
 struct App {
@@ -131,17 +133,17 @@ fn pad_img(img: PhotonImage, new_size: Size) -> PhotonImage {
 
     let start_time = std::time::Instant::now();
 
-    let new_img = 
-        padding_left(
-            &padding_right(
-                &padding_bottom(
-                    &padding_top(
-                        &img,
-                        pad_top, rgba_transparent_generator()),
-                    pad_bottom, rgba_transparent_generator()),
-                pad_right, rgba_transparent_generator()),
-            pad_left, rgba_transparent_generator());
-    
+    // let new_img = 
+    //     padding_left(
+    //         &padding_right(
+    //             &padding_bottom(
+    //                 &padding_top(
+    //                     &img,
+    //                     pad_top, rgba_transparent_generator()),
+    //                 pad_bottom, rgba_transparent_generator()),
+    //             pad_right, rgba_transparent_generator()),
+    //         pad_left, rgba_transparent_generator());
+    let new_img = pad_img_sides(img, pad_left, pad_right, pad_top, pad_bottom);
 
     println!("paddingInThePadding Time: {:?}", start_time.elapsed());
 
@@ -222,18 +224,59 @@ fn pan_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
     padded_cropped_img
 }
 
-fn pad_img_sides (cropped_img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32, pad_bottom: u32) -> PhotonImage {
-    let padded_cropped_img =
-        padding_left(
-            &padding_right(
-                &padding_bottom(
-                    &padding_top(
-                        &cropped_img,
-                        pad_top, rgba_transparent_generator()),
-                    pad_bottom, rgba_transparent_generator()),
-                pad_right, rgba_transparent_generator()),
-            pad_left, rgba_transparent_generator());
-    padded_cropped_img
+fn pad_img_sides (img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32, pad_bottom: u32) -> PhotonImage {
+    // old_code
+    // let padded_cropped_img =
+    //     padding_left(
+    //         &padding_right(
+    //             &padding_bottom(
+    //                 &padding_top(
+    //                     &img,
+    //                     pad_top, rgba_transparent_generator()),
+    //                 pad_bottom, rgba_transparent_generator()),
+    //             pad_right, rgba_transparent_generator()),
+    //         pad_left, rgba_transparent_generator());
+    // end old code
+    // new code
+    use rayon::prelude::*;
+    use std::sync::{Arc, Mutex};
+
+    let new_width = img.get_width() + pad_left + pad_right;
+    let new_height = img.get_height() + pad_top + pad_bottom;
+
+    // Create a new buffer filled with transparent pixels
+    let new_buffer = vec![0u8; (new_width * new_height * 4) as usize];
+    
+    // Wrap the buffer in an Arc<Mutex<>> to allow safe parallel modification
+    let buffer = Arc::new(Mutex::new(new_buffer));
+    
+    // Copy the source image pixels into the correct position in the new buffer
+    let src_pixels = img.get_raw_pixels();
+    let src_width = img.get_width();
+    let src_height = img.get_height();
+
+    // Process rows in parallel
+    (0..src_height).into_par_iter().for_each(|y| {
+        let src_row_start = (y * src_width * 4) as usize;
+        let src_row_end = src_row_start + (src_width * 4) as usize;
+        let dst_row_start = ((y + pad_top) * new_width * 4 + pad_left * 4) as usize;
+        let dst_row_end = dst_row_start + (src_width * 4) as usize;
+        
+        // Create a row buffer with the pixels we want to copy
+        let row_data = src_pixels[src_row_start..src_row_end].to_vec();
+        
+        // Lock the buffer only for the time needed to update it
+        let mut buffer = buffer.lock().unwrap();
+        buffer[dst_row_start..dst_row_end].copy_from_slice(&row_data);
+    });
+
+    // Unwrap the Arc<Mutex<>> to get back our buffer
+    let final_buffer = Arc::try_unwrap(buffer)
+        .expect("Failed to unwrap Arc")
+        .into_inner()
+        .expect("Failed to unwrap Mutex");
+
+    PhotonImage::new(final_buffer, new_width, new_height)
 }
 
 /// Applies zooming to an image based on the provided panning data.
@@ -298,13 +341,16 @@ impl ApplicationHandler for App {
         let (img_width, img_height) = (img.get_width(), img.get_height());
         dbg!(img_width, img_height);
         
+        
         // creating window
         let window_attributes = Window::default_attributes()
             .with_min_inner_size(LogicalSize::new(img_width, img_height))
             .with_inner_size(LogicalSize::new(img_width, img_height))
             .with_active(true)
-            .with_enabled_buttons(WindowButtons::CLOSE)
+            // .with_enabled_buttons(WindowButtons::CLOSE)
             .with_transparent(true)
+            .with_title(format!("luminix ({image_path})"))
+            .with_window_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok())
             .with_system_backdrop(BackdropType::TransientWindow);
         let window = Box::new(event_loop.create_window(window_attributes).unwrap());
         
@@ -353,7 +399,7 @@ impl ApplicationHandler for App {
                 
                 let max_zoom_level = 10;
                 match delta {
-                    LineDelta(x, y) => {
+                    LineDelta(_, y) => {
                         if y.is_sign_positive() {
                             if self.panning_data.zoom_level < max_zoom_level {
                                 self.panning_data.zoom_level += 1;
@@ -401,6 +447,7 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
+                let total_time = std::time::Instant::now();
                 let start_time = std::time::Instant::now();
                 // setup
                 let display = window_ref.display_handle().unwrap();
@@ -453,7 +500,25 @@ impl ApplicationHandler for App {
                 println!("Calc max buffer time: {:?}", start_time.elapsed());
                 let start_time = std::time::Instant::now();
 
-                let resized_img = resize(&middle_img, new_img_size.width, new_img_size.height, SamplingFilter::Nearest); // resize image
+                let dyn_img = photon_rs::helpers::dyn_image_from_raw(&middle_img);
+                let src_img = Image::from_vec_u8(middle_img.get_width(), middle_img.get_height(), dyn_img.into_bytes(), PixelType::U8x4).expect("aasdsad");
+                let mut dst_image = Image::new(
+                    new_img_size.width,
+                    new_img_size.height,
+                    src_img.pixel_type(),
+                );
+                
+                
+                let mut resizer = Resizer::new();
+                
+                resizer.resize(&src_img, &mut dst_image, &ResizeOptions {algorithm:ResizeAlg::Nearest,cropping:SrcCropping::None,mul_div_alpha:true}).unwrap();
+                
+                let width = dst_image.width();
+                let height = dst_image.height();
+                
+                let resized_img = PhotonImage::new(dst_image.into_vec(), width, height);
+                
+                // let resized_img = resize(&middle_img, new_img_size.width, new_img_size.height, SamplingFilter::Nearest); // resize image
                 println!("Resize time: {:?}", start_time.elapsed());
                 let start_time = std::time::Instant::now();
 
@@ -470,6 +535,7 @@ impl ApplicationHandler for App {
                 window_ref.pre_present_notify();
                 buffer.present().unwrap();
                 println!("Buffer copy and present time: {:?}", start_time.elapsed());
+                println!("Total Frame Time: {:?}", total_time.elapsed());
 
 
             }
