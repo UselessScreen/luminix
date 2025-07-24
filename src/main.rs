@@ -2,21 +2,23 @@ use bytemuck::cast_slice;
 use fast_image_resize::images::Image;
 use fast_image_resize::{IntoImageView, PixelType, ResizeAlg, ResizeOptions, Resizer, SrcCropping};
 use fraction::{Integer, Zero};
-use image::{AnimationDecoder, ImageFormat};
+use image::{AnimationDecoder, Delay, ImageFormat};
 use photon_rs;
-use photon_rs::{PhotonImage, Rgba};
+use photon_rs::PhotonImage;
 use rayon::iter::ParallelIterator;
 use softbuffer;
 use softbuffer::{Context, Surface};
 use std::io::BufReader;
 use std::num::NonZeroU32;
 use std::ops::Div;
+use std::time::{Duration, Instant};
 use std::{env, time};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::MouseScrollDelta::LineDelta;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::KeyCode;
 use winit::platform::windows::{BackdropType, IconExtWindows, WindowAttributesExtWindows};
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Icon, Window, WindowId};
@@ -27,7 +29,9 @@ struct App {
     window: Option<Box<Window>>,
     // pixels: Option<Pixels<'static>>,
     img: Option<PhotonImage>,
-    gif_frames: Option<Vec<PhotonImage>>, // Store GIF frames
+    gif_frames: Option<Vec<GifData>>, // Store GIF frames
+    current_frame_index: u32,
+    next_frame_time: Option<Instant>,
     panning_data: PanningData,
 }
 
@@ -41,6 +45,12 @@ struct PanningData {
 struct Size {
     width: u32,
     height: u32,
+}
+
+#[derive(Debug, Clone)]
+struct GifData {
+    frame: PhotonImage,
+    delay: Delay,
 }
 
 fn fast_resize_photon_img(img: &PhotonImage, new_img_size: Size) -> PhotonImage {
@@ -133,11 +143,6 @@ fn calculate_max_buffer_size(window_width: u32, window_height: u32, img_size: Si
             height: window_height,
         }
     }
-}
-
-fn rgba_transparent_generator() -> Rgba {
-    Rgba::new(0_u8, 0_u8, 0_u8, 0_u8) // transparent padding
-    // Rgba::new(255_u8, 0_u8, 0_u8, 255_u8) // red padding (debug)
 }
 
 /// Pads an image to fit within new dimensions.
@@ -425,6 +430,26 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
 }
 
 impl ApplicationHandler for App {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        match cause {
+            StartCause::ResumeTimeReached { .. } => {
+                if let Some(gif_frames) = self.gif_frames.clone() {
+                    println!("------------------------");
+                    let current_frame = &gif_frames[self.current_frame_index as usize];
+                    self.img = Some(current_frame.frame.clone());
+
+                    // schedule the next frame
+                    self.current_frame_index = (self.current_frame_index + 1) % gif_frames.len() as u32;
+                    self.next_frame_time = Some(Instant::now() + Duration::from_millis((gif_frames[self.current_frame_index as usize].delay.numer_denom_ms().0 / gif_frames[self.current_frame_index as usize].delay.numer_denom_ms().1) as u64));
+                    println!("{:?}", (gif_frames[self.current_frame_index as usize].delay.numer_denom_ms().0 / gif_frames[self.current_frame_index as usize].delay.numer_denom_ms().1) as u64);
+                    self.window.as_ref().unwrap().request_redraw();
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_time.expect("REASON")));
+                }
+            }
+            StartCause::WaitCancelled { .. } => {}
+            _ => {}
+        }
+    }
     // init function
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // get args
@@ -439,16 +464,19 @@ impl ApplicationHandler for App {
             let gif_reader = image::codecs::gif::GifDecoder::new(BufReader::new(std::fs::File::open(image_path).unwrap())).unwrap();
             let frames = gif_reader.into_frames();
             let frames = frames.collect_frames().expect("Failed to collect GIF frames");
-            let photon_frames: Vec<PhotonImage> = frames.iter().map(|frame| {
+            let photon_frames: Vec<GifData> = frames.iter().map(|frame| {
+                let delay = frame.delay();
                 let dyn_img = image::DynamicImage::ImageRgba8(frame.buffer().clone());
                 let rgba = dyn_img.to_rgba8().into_raw();
                 let mut photon_img = PhotonImage::new(rgba, frame.buffer().width(), frame.buffer().height());
                 photon_rs::channels::swap_channels(&mut photon_img, 0, 2);
-                photon_img
+                GifData {frame: photon_img, delay}
             }).collect();
             println!("this is gif");
             if let Some(first_frame) = photon_frames.first() {
-                let (img_width, img_height) = (first_frame.get_width(), first_frame.get_height());
+               
+                
+                let (img_width, img_height) = (first_frame.frame.get_width(), first_frame.frame.get_height());
                 dbg!(img_width, img_height);
                 let window_attributes = Window::default_attributes()
                     .with_min_inner_size(LogicalSize::new(img_width, img_height))
@@ -461,7 +489,10 @@ impl ApplicationHandler for App {
                 let window = Box::new(event_loop.create_window(window_attributes).unwrap());
                 self.window = Some(window);
                 self.gif_frames = Some(photon_frames.clone()); // Use clone to avoid move error
-                self.img = Some(first_frame.clone()); // Display first frame by default
+                self.img = Some(first_frame.frame.clone()); // Display first frame by default
+                self.current_frame_index = 0;
+                self.next_frame_time = Some(Instant::now() + first_frame.delay.into());
+                event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_time.unwrap()))
             }
             return;
         }
@@ -494,12 +525,23 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let window_ref = self.window.as_ref().unwrap();
         match event {
+            WindowEvent::KeyboardInput {event, ..} => {
+                // P
+                if event.physical_key == KeyCode::KeyP && event.state.is_pressed() {
+                    if self.gif_frames.is_some() {
+                        match event_loop.control_flow() {
+                            ControlFlow::WaitUntil(_) => {event_loop.set_control_flow(ControlFlow::Wait)}
+                            ControlFlow::Wait => {event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_time.unwrap()))}
+                            _ => {}
+                        }
+                    } 
+                }
+            }
             WindowEvent::CloseRequested => {
                 println!("The close button was pressed; stopping");
                 event_loop.exit();
                 
             },
-            
             WindowEvent::MouseInput {state, button, .. } => {
                 // dbg!(button, state);
                 
@@ -548,7 +590,6 @@ impl ApplicationHandler for App {
                 }
                 window_ref.request_redraw();
             }
-            
             WindowEvent::CursorMoved {position, .. } => {
                 if self.panning_data.panning {
                     // dbg!(position);
@@ -575,7 +616,6 @@ impl ApplicationHandler for App {
                     window_ref.set_cursor_position(PhysicalPosition::new(window_size_x/2, window_size_y/2)).expect("Error setting cursor position");
                 }
             }
-
             WindowEvent::RedrawRequested => {
                 let total_time = std::time::Instant::now();
                 let start_time = std::time::Instant::now();
@@ -651,7 +691,7 @@ impl ApplicationHandler for App {
                 let start_time = time::Instant::now();
 
                 let mut buffer = surface.buffer_mut().unwrap();
-                let mut raw_pixel_vec = padded_img.get_raw_pixels();
+                let raw_pixel_vec = padded_img.get_raw_pixels();
                 let raw_pixel_slice = raw_pixel_vec.as_slice();
                 let casted_pixel_slice = cast_slice::<u8, u32>(raw_pixel_slice);
                 buffer.copy_from_slice(casted_pixel_slice);
