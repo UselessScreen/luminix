@@ -3,6 +3,10 @@ use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, L
 use egui_extras::{Column, TableBuilder};
 use egui_keybind::{Bind, Keybind};
 use egui_winit::State;
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::Write;
+use std::str::FromStr;
 use wgpu::{self, Adapter, Device, Instance, Queue, Surface, SurfaceConfiguration};
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
@@ -26,7 +30,12 @@ pub struct SettingsWindow {
     egui_rpass: Option<egui_wgpu::Renderer>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ConfigurableSettings {
+    pub keys: Keys
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Keys {
     pub settings: KeyWrapper,
     pub pause: KeyWrapper,
@@ -34,12 +43,7 @@ pub struct Keys {
     pub prev_frame: KeyWrapper,
 }
 
-#[derive(Clone)]
-pub struct ConfigurableSettings {
-    pub keys: Keys
-}
-
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct KeyWrapper {
     key_code: KeyCode
 }
@@ -47,7 +51,6 @@ impl KeyWrapper {
     pub fn get_keycode(&self) -> KeyCode {
         self.key_code
     }
-    
 }
 
 
@@ -115,7 +118,7 @@ impl SettingsWindow {
             queue: None,
             config: None,
             egui_rpass: None,
-            configurable_settings: ConfigurableSettings::default(),
+            configurable_settings: Self::load_settings(),
         };
         
         // Initialize WGPU
@@ -237,8 +240,7 @@ impl SettingsWindow {
                 
                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
                     if ui.button("Apply").clicked() {
-                        // TODO: Apply the settings to the image
-                        // println!("Applied settings: brightness={}, contrast={}", self.brightness, self.contrast);
+                        self.save_settings();
                     }
                 });
             });
@@ -373,6 +375,32 @@ impl SettingsWindow {
 
     pub fn get_settings(&self) -> ConfigurableSettings {
         self.configurable_settings.clone()
+    }
+    
+    fn save_settings(&self) {
+        
+        let f = File::options()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open("luminix-settings.ron")
+            .expect("Failed opening file for writing settings");
+        
+        ron::Options::default()
+            .to_io_writer_pretty(f, &self.configurable_settings, ron::ser::PrettyConfig::new().compact_arrays(true))
+            .expect("Failed to write to file");
+    }
+    fn load_settings() -> ConfigurableSettings {
+
+        let input_path = "luminix-settings.ron";
+        let f = File::open(input_path).expect("Failed opening file for reading seettings");
+        
+        // return
+        ron::de::from_reader(f).unwrap_or_else(|e| {
+            eprintln!("Failed to load luminix-settings.ron, falling back to default configuration values. Error message: {e}");
+            println!("Failed to load luminix-settings.ron, falling back to default configuration values. Error message: {e}");
+            ConfigurableSettings::default()
+        })
     }
 
     pub fn show(&mut self) {
