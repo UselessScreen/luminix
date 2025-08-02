@@ -1,4 +1,6 @@
 mod settings_window;
+mod register_file_association;
+
 use bytemuck::cast_slice;
 use fast_image_resize::images::Image;
 use fast_image_resize::{IntoImageView, PixelType, ResizeAlg, ResizeOptions, Resizer, SrcCropping};
@@ -354,6 +356,7 @@ fn pad_img_sides (img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32,
 ///
 /// # Returns
 /// A new `PhotonImage` instance with the applied zoom.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
 fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
     let zoom_level = panning_data.zoom_level;
     
@@ -361,22 +364,23 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
     let zoom_level_multiplier = 
         if img.get_height() > img.get_width() {
             // use width
-            img.get_width()/10    
+            img.get_width() as f32 / 10_f32
         } else {
             // use height
-            img.get_height()/10
+            img.get_height() as f32 / 10_f32
         };
 
-    let zoom_constant = zoom_level.unsigned_abs() * zoom_level_multiplier / 2;
+    let zoom_constant = zoom_level.unsigned_abs() as f32 * zoom_level_multiplier / 2_f32;
     // dbg!(zoom_constant, zoom_level_multiplier);
     // dbg!(zoom_constant);
     
     
     
     
+    // return this
     
-    let zoomed_img;
-    if zoom_level.is_positive() {
+    if zoom_level.is_positive()
+    {
         // let pos_x = img.get_width() - zoom_constant;
         // let pos_y = img.get_height() - zoom_constant;
         // let neg_x = zoom_constant;
@@ -416,17 +420,16 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
         let x1 = (x0 + crop_width).min(img.get_width() as f32);
         let y1 = (y0 + crop_height).min(img.get_height() as f32);
         
-        zoomed_img = fast_crop(img, x1 as u32, y1 as u32, x0 as u32, y0 as u32)
+        fast_crop(img, x1 as u32, y1 as u32, x0 as u32, y0 as u32)
         
     } else {
-        let pad_top = zoom_constant;
-        let pad_bottom = zoom_constant;
-        let pad_left = zoom_constant;
-        let pad_right = zoom_constant;
+        let pad_top = zoom_constant as u32;
+        let pad_bottom = zoom_constant as u32;
+        let pad_left = zoom_constant as u32;
+        let pad_right = zoom_constant as u32;
         // dbg!(pad_top);
-        zoomed_img = pad_img_sides(img, pad_left, pad_right, pad_top, pad_bottom);
+        pad_img_sides(img, pad_left, pad_right, pad_top, pad_bottom)
     }
-    zoomed_img
 }
 
 

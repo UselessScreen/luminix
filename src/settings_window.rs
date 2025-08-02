@@ -1,9 +1,11 @@
+use crate::register_file_association::register_file_association;
 use egui::RichText;
 use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, Separator, Ui, Vec2, ViewportBuilder};
 use egui_extras::{Column, TableBuilder};
 use egui_keybind::{Bind, Keybind};
 use egui_winit::State;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::str::FromStr;
@@ -123,7 +125,7 @@ impl SettingsWindow {
         
         // Initialize WGPU
         pollster::block_on(settings_window.initialize_wgpu());
-        settings_window.window.set_visible(true);
+        // settings_window.window.set_visible(true);
         settings_window
     }
     
@@ -241,6 +243,13 @@ impl SettingsWindow {
                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
                     if ui.button("Apply").clicked() {
                         self.save_settings();
+                    }
+                });
+                
+                #[cfg(target_os = "windows")]
+                ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
+                    if ui.button("Register File association").clicked() {
+                        register_file_association().expect("Error registering file association");
                     }
                 });
             });
@@ -378,12 +387,15 @@ impl SettingsWindow {
     }
     
     fn save_settings(&self) {
+
+        let binding = env::current_exe().unwrap().parent().unwrap().join("luminix-settings.ron");
+        let input_path = binding.as_path();
         
         let f = File::options()
             .create(true)
             .truncate(true)
             .write(true)
-            .open("luminix-settings.ron")
+            .open(input_path)
             .expect("Failed opening file for writing settings");
         
         ron::Options::default()
@@ -392,13 +404,18 @@ impl SettingsWindow {
     }
     fn load_settings() -> ConfigurableSettings {
 
-        let input_path = "luminix-settings.ron";
-        let f = File::open(input_path).expect("Failed opening file for reading seettings");
+        let binding = env::current_exe().unwrap().parent().unwrap().join("luminix-settings.ron");
+        let input_path = binding.as_path();
+        let f = File::open(input_path);
+        
+        if f.is_err() {
+            eprintln!("Failed to load luminix-settings.ron, falling back to default configuration values. Error message: {}", f.unwrap_err());
+            return ConfigurableSettings::default()
+        };
         
         // return
-        ron::de::from_reader(f).unwrap_or_else(|e| {
+        ron::de::from_reader(f.unwrap()).unwrap_or_else(|e| {
             eprintln!("Failed to load luminix-settings.ron, falling back to default configuration values. Error message: {e}");
-            println!("Failed to load luminix-settings.ron, falling back to default configuration values. Error message: {e}");
             ConfigurableSettings::default()
         })
     }
