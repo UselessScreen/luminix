@@ -15,13 +15,16 @@ rayon = "1.10.0"
 image = "0.25.6"
 egui = { version = "0.32.0", features = ["color-hex"] }
 egui-winit = "0.32.0"
-wgpu = "25.0.2"  # Updated to match the version used by egui-wgpu
+wgpu = "25.0.2"  
 egui-wgpu = "0.32.0"
 pollster = "0.3"
-egui-keybind = { path = "../../../../Documents/GitHub/egui-keybind" }
+egui-keybind = "0.6.0"
 egui_extras = "0.32.0"
 serde = "1.0.219"
 ron = "0.10.1"
+
+[patch.crates-io]
+egui-keybind = { git = "https://github.com/UselessScreen/egui-keybind.git" } # waiting for PR approval: https://github.com/zeozeozeo/egui-keybind/pull/14
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
