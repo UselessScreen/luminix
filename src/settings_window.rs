@@ -1,14 +1,14 @@
 use crate::register_file_association::register_file_association;
-use egui::RichText;
-use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, Separator, Ui, Vec2, ViewportBuilder};
+use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, RichText, Separator, Style, Ui, Vec2, ViewportBuilder};
 use egui_extras::{Column, TableBuilder};
 use egui_keybind::{Bind, Keybind};
 use egui_winit::State;
 use serde::{Deserialize, Serialize};
-use std::env;
+use std::fmt::Formatter;
 use std::fs::File;
-use std::io::Write;
-use std::str::FromStr;
+use std::ops::{Index, IndexMut};
+use std::{array, env, fmt};
+use strum::{EnumCount, EnumIter, EnumMessage, IntoEnumIterator};
 use wgpu::{self, Adapter, Device, Instance, Queue, Surface, SurfaceConfiguration};
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
@@ -32,9 +32,42 @@ pub struct SettingsWindow {
     egui_rpass: Option<egui_wgpu::Renderer>,
 }
 
+const ACTION_AMOUNT: usize = 2;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ConfigurableSettings {
-    pub keys: Keys
+    pub keys: Keys,
+    pub actions: [Action; ACTION_AMOUNT],
+}
+
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, EnumIter)]
+#[derive(Debug)]
+pub enum Action {
+    #[default]
+    None,
+    Command(String),
+}
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Action::Command(_) => {write!(f, "Command")}
+            Action::None => {write!(f, "None")}
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, EnumIter, EnumCount, EnumMessage)]
+#[allow(non_camel_case_types)]
+enum KeysValue {
+    #[strum(message="Open settings")]
+    settings,
+    #[strum(message="Pause gif")]
+    pause,
+    #[strum(message="Next frame")]
+    next_frame,
+    #[strum(message="Previous frame")]
+    prev_frame,
+    #[strum(message="Actions")]
+    actions(usize),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -43,46 +76,78 @@ pub struct Keys {
     pub pause: KeyWrapper,
     pub next_frame: KeyWrapper,
     pub prev_frame: KeyWrapper,
+    pub actions: [KeyWrapper; ACTION_AMOUNT],
 }
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct KeyWrapper {
-    key_code: KeyCode
-}
-impl KeyWrapper {
-    pub fn get_keycode(&self) -> KeyCode {
-        self.key_code
+impl Index<KeysValue> for Keys {
+    type Output = KeyWrapper;
+    fn index(&self, index: KeysValue) -> &Self::Output {
+        match index {
+            KeysValue::settings => &self.settings,
+            KeysValue::pause => &self.pause,
+            KeysValue::next_frame => &self.next_frame,
+            KeysValue::prev_frame => &self.prev_frame,
+            KeysValue::actions(i) => &self.actions[i],
+        }
     }
 }
-
-
+impl IndexMut<KeysValue> for Keys {
+    fn index_mut(&mut self, index: KeysValue) -> &mut Self::Output {
+        match index {
+            KeysValue::settings => &mut self.settings,
+            KeysValue::pause => &mut self.pause,
+            KeysValue::next_frame => &mut self.next_frame,
+            KeysValue::prev_frame => &mut self.prev_frame,
+            KeysValue::actions(i) => &mut self.actions[i],
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct KeyWrapper {
+    key_code: Option<KeyCode>
+}
+impl KeyWrapper {
+    pub fn get_keycode(&self) -> Option<KeyCode> {
+        self.key_code
+    }
+    pub fn new(key_code: KeyCode) -> KeyWrapper {
+        KeyWrapper {key_code: Some(key_code)}
+    }
+    pub fn new_empty() -> KeyWrapper {
+        KeyWrapper {key_code: None}
+    }
+}
 impl Bind for KeyWrapper {
     fn set(&mut self, keyboard: Option<KeyboardShortcut>, _pointer: Option<PointerButton>) {
         if let Some(keyboard) = keyboard {
-            *self = KeyWrapper{key_code: egui_key_to_winit(keyboard.logical_key)};
-            
+            *self = KeyWrapper{key_code: Some(egui_key_to_winit(keyboard.logical_key))};
         }
     }
 
     fn format(&self, _names: &ModifierNames<'_>, _is_mac: bool) -> String {
-        format!("{:?}", self.key_code)
+        match self.key_code {
+            None => String::from("None"),
+            Some(key) => {format!("{:?}", key)}
+        }
     }
 
     fn pressed(&self, input: &mut InputState) -> bool {
-        let egui_keycode = winit_keycode_to_egui(self.key_code);
-        input.key_pressed(egui_keycode)
+        match self.key_code {
+            None => false,
+            Some(key) => input.key_pressed(winit_keycode_to_egui(key)),
+        }
     }
 }
-
 impl Default for ConfigurableSettings {
     fn default() -> Self {
         ConfigurableSettings {
             keys: Keys {
-                settings: KeyWrapper { key_code: KeyCode::KeyK },
-                pause: KeyWrapper { key_code: KeyCode::Space },
-                next_frame: KeyWrapper { key_code: KeyCode::Period },
-                prev_frame: KeyWrapper { key_code: KeyCode::Comma },
-            }
+                settings: KeyWrapper::new(KeyCode::KeyK),
+                pause: KeyWrapper::new(KeyCode::Space),
+                next_frame: KeyWrapper::new(KeyCode::Period),
+                prev_frame: KeyWrapper::new(KeyCode::Comma),
+                actions: array::from_fn(|_| KeyWrapper::new_empty()),
+            },
+            actions: array::from_fn(|_| Action::default())
         }
     }
 }
@@ -137,6 +202,7 @@ impl SettingsWindow {
         let instance = self.instance.as_ref().unwrap();
         
         // Create surface with proper lifetime handling
+        // no idea how to do this safely
         let surface = unsafe { 
             let surface = instance.create_surface(&self.window).expect("Failed to create surface");
             // SAFETY: We're extending the lifetime to 'static because we know the window
@@ -215,16 +281,20 @@ impl SettingsWindow {
             return;
         }
         let ctx = self.ctx.clone();
-        
 
         // Begin frame and create UI
         let input = self.state.take_egui_input(&self.window);
         let output = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
+                // when ran in dev profile, enable debug menu
+                #[cfg(debug_assertions)]
+                {
+                    ui.style_mut().debug = egui::style::DebugOptions::default();
+                }
                 ui.style_mut().visuals.faint_bg_color = hex_color!("#282828"); // change table background
                 ui.style_mut().override_text_valign = Some(Align::Center);
 
-                
+                // Keybinds
                 ui.group(|ui| {
                     egui::CollapsingHeader::new(RichText::new("Keybinds").heading())
                         .default_open(true)
@@ -233,11 +303,17 @@ impl SettingsWindow {
                             self.keybind_table(ui);
                         });
                 });
+                ui.add_space(5.0);
+                // Actions
+                ui.group(|ui| {
+                    egui::CollapsingHeader::new(RichText::new("Actions").heading())
+                        .default_open(true)
+                        .show_unindented(ui, |ui| {
+                            ui.add(Separator::default().grow(6.0));
+                            self.action_table(ui);
+                        });
+                });
                 
-                // settings_painter.rect_filled(rect, 10, Color32::from_gray(20));
-                
-                // ui.add_space(10.0);
-                // ui.separator();
                 ui.add_space(10.0);
                 
                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
@@ -246,6 +322,7 @@ impl SettingsWindow {
                     }
                 });
                 
+                // TODO: add linux & macos file association support
                 #[cfg(target_os = "windows")]
                 ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                     if ui.button("Register File association").clicked() {
@@ -330,6 +407,69 @@ impl SettingsWindow {
             }
         }
     }
+    
+    fn action_table(&mut self, ui: &mut Ui) {
+        TableBuilder::new(ui)
+            .column(Column::remainder())
+            .column(Column::remainder())
+            .striped(true)
+            .id_salt("actions_table")
+            .cell_layout(Layout::default().with_cross_align(Align::LEFT).with_main_justify(true))
+            .body(|body| {
+                // Action 1
+                let row_heights: Vec<f32> = self.configurable_settings.actions.iter().map(|action| {
+                   match action {
+                       Action::Command(_) => {40.0}
+                       Action::None => {20.0}
+                   }
+                }).collect();
+                body.heterogeneous_rows(row_heights.into_iter(), |mut row| {
+                    let row_index = row.index();
+                    // Label column
+                    row.col(|ui| {
+                        let label = format!("Action {}", row_index + 1);
+                       ui.label(label);
+                    });
+                    
+                    // Setting Column
+                    row.col(|ui| {
+                        ui.with_layout(Layout::top_down(Align::LEFT).with_main_align(Align::Center).with_main_justify(true), |ui| {
+                            // action selection
+                            ui.with_layout(Layout::top_down_justified(Align::LEFT),|ui| {
+                                ui.set_height(ui.style().spacing.interact_size.y);
+                                egui::ComboBox::from_id_salt(format!("action settings index {row_index}"))
+                                    .selected_text(self.configurable_settings.actions[row_index].to_string())
+                                    .show_ui(ui, |ui| {
+                                        for action in Action::iter() {
+                                            ui.selectable_value(&mut self.configurable_settings.actions[row_index], action.clone(), action.to_string());
+                                        }
+                                    });
+                            });
+                            
+                            // if Command
+                            if let Action::Command(command) = &mut self.configurable_settings.actions[row_index] {
+                                // help tooltip formatting
+                                let default_style = Style::default();
+                                let mut layout_job = egui::text::LayoutJob::default();
+                                RichText::new("Use ")
+                                    .append_to(&mut layout_job, &default_style, egui::FontSelection::default(), Align::LEFT);
+                                RichText::new("%1")
+                                    .code()
+                                    .append_to(&mut layout_job, &default_style, egui::FontSelection::default(), Align::LEFT);
+                                RichText::new(" as placeholder for image path in command.")
+                                    .append_to(&mut layout_job, &default_style, egui::FontSelection::default(), Align::LEFT);
+                                // command selection menu
+                                ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
+                                    egui::TextEdit::singleline(command).code_editor().show(ui).response.on_hover_text(layout_job);
+                                    ui.button("Test command")
+                                });
+                            }
+                        });
+                        
+                    });
+                });
+            });
+    }
 
     fn keybind_table(&mut self, ui: &mut Ui) {
         TableBuilder::new(ui)
@@ -338,45 +478,29 @@ impl SettingsWindow {
             .striped(true)
             .id_salt("keys")
             .cell_layout(Layout::default().with_cross_align(Align::LEFT).with_main_justify(true))
-            .body(|mut body| {
-                // settings
-                body.row(20.0, |mut row| {
+            .body(|body| {
+                let row_amount = (KeysValue::COUNT - 1) + (self.configurable_settings.keys.actions.len());
+                body.rows(20.0, row_amount, |mut row| {
+                    let row_index = row.index();
+                    let keys_index = match row_index {
+                        0 => KeysValue::settings,
+                        1 => KeysValue::pause,
+                        2 => KeysValue::next_frame,
+                        3 => KeysValue::prev_frame,
+                        _ => KeysValue::actions(row_index-4)
+                    };
+                    let row_label = if let KeysValue::actions(action_index) = keys_index {
+                        format!("Action {}", action_index+1)
+                    } else {
+                        String::from(keys_index.get_message().unwrap())
+                    };
+                    // label row
                     row.col(|ui| {
-                        ui.label("Settings");
+                        ui.label(&row_label);
                     });
-
+                    // keybind row
                     row.col(|ui| {
-                        ui.add(Keybind::new(&mut self.configurable_settings.keys.settings, "settings_key").with_reset(KeyWrapper{key_code: KeyCode::KeyK}).with_reset_key(Some(Key::Escape)));
-                    });
-                });
-                // pause
-                body.row(20.0, |mut row| {
-                    row.col(|ui| {
-                        ui.label("Pause gif");
-                    });
-
-                    row.col(|ui| {
-                        ui.add(Keybind::new(&mut self.configurable_settings.keys.pause, "pause_key").with_reset(KeyWrapper{key_code: KeyCode::Space}).with_reset_key(Some(Key::Escape)));
-                    });
-                });
-                // forward frame
-                body.row(20.0, |mut row| {
-                    row.col(|ui| {
-                        ui.label("Gif next frame");
-                    });
-
-                    row.col(|ui| {
-                        ui.add(Keybind::new(&mut self.configurable_settings.keys.next_frame, "fw_key").with_reset(KeyWrapper{key_code: KeyCode::Period}).with_reset_key(Some(Key::Escape)));
-                    });
-                });
-                // back frame
-                body.row(20.0, |mut row| {
-                    row.col(|ui| {
-                        ui.label("Gif previous frame");
-                    });
-
-                    row.col(|ui| {
-                        ui.add(Keybind::new(&mut self.configurable_settings.keys.prev_frame, "rw_key").with_reset(KeyWrapper{key_code: KeyCode::Comma}).with_reset_key(Some(Key::Escape)));
+                        ui.add(Keybind::new(&mut self.configurable_settings.keys[keys_index], row_label).with_reset(KeyWrapper::new_empty()).with_reset_key(Some(Key::Escape)));
                     });
                 });
             });
@@ -402,6 +526,7 @@ impl SettingsWindow {
             .to_io_writer_pretty(f, &self.configurable_settings, ron::ser::PrettyConfig::new().compact_arrays(true))
             .expect("Failed to write to file");
     }
+        
     fn load_settings() -> ConfigurableSettings {
 
         let binding = env::current_exe().unwrap().parent().unwrap().join("luminix-settings.ron");
@@ -420,15 +545,15 @@ impl SettingsWindow {
         })
     }
 
-    pub fn show(&mut self) {
+    pub fn show(&self) {
         println!("opening settings window");
         self.window.set_visible(true);
+        self.window.focus_window();
     }
 }
 
 #[allow(clippy::too_many_lines, clippy::enum_glob_use)]
 fn winit_keycode_to_egui(key_code: KeyCode) -> Key {
-    
     use Key::*;
     match key_code {
         KeyCode::Backquote => Backtick,

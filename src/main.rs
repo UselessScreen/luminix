@@ -1,3 +1,10 @@
+#![cfg_attr(
+    all(
+        target_os = "windows",
+        not(debug_assertions),
+    ),
+    windows_subsystem = "windows"
+)]
 mod settings_window;
 mod register_file_association;
 
@@ -18,7 +25,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::MouseScrollDelta::LineDelta;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::platform::windows::{BackdropType, IconExtWindows, WindowAttributesExtWindows};
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Icon, Window, WindowId};
@@ -539,36 +546,24 @@ impl ApplicationHandler for App {
                 WindowEvent::KeyboardInput {event, ..} => {
                     if event.state.is_pressed() {
                         if let PhysicalKey::Code(code) = event.physical_key {
-                            let settings_keycode = settings_window.get_settings().keys.settings.get_keycode();
-                            if code == settings_keycode {
-                                
-                            }
-                            match code {
-                                KeyCode::KeyP => {
-                                    if self.gif_frames.is_some() {
-                                        match event_loop.control_flow() {
-                                            ControlFlow::WaitUntil(_) => {event_loop.set_control_flow(ControlFlow::Wait)}
-                                            ControlFlow::Wait => {event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_time.unwrap()))}
-                                            ControlFlow::Poll => {}
-                                        }
+                            if Some(code) == settings_window.get_settings().keys.settings.get_keycode() {
+                                self.settings_window.as_ref().unwrap().show();
+                            } else if Some(code) == settings_window.get_settings().keys.pause.get_keycode() {
+                                if self.gif_frames.is_some() {
+                                    match event_loop.control_flow() {
+                                        ControlFlow::WaitUntil(_) => {event_loop.set_control_flow(ControlFlow::Wait)}
+                                        ControlFlow::Wait => {event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_time.unwrap()))}
+                                        ControlFlow::Poll => {}
                                     }
                                 }
-                                KeyCode::Period => {
-                                    if self.gif_frames.is_some() && event_loop.control_flow() == ControlFlow::Wait {
-                                        // Paused
-                                        self.gif_next_frame(event_loop, false);
-                                    }
+                            } else if Some(code) == settings_window.get_settings().keys.next_frame.get_keycode() {
+                                if self.gif_frames.is_some() && event_loop.control_flow() == ControlFlow::Wait {
+                                    // Paused
+                                    self.gif_next_frame(event_loop, false);
                                 }
-                                KeyCode::Comma => {
-                                    if self.gif_frames.is_some() && event_loop.control_flow() == ControlFlow::Wait {
-                                        // Paused
-                                        self.gif_prev_frame(event_loop, false,);
-                                    }
-                                }
-                                code if code == settings_keycode => {
-                                    self.settings_window.as_mut().unwrap().show();
-                                }
-                                _ => {}
+                            } else if Some(code) == settings_window.get_settings().keys.prev_frame.get_keycode() && self.gif_frames.is_some() && event_loop.control_flow() == ControlFlow::Wait {
+                                // Paused
+                                self.gif_prev_frame(event_loop, false,);
                             }
                         }
                     }

@@ -9,13 +9,18 @@ pub fn register_file_association() -> anyhow::Result<()> {
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let classes = hkcu.open_subkey_with_flags("Software\\Classes", KEY_WRITE)?;
-
-    // Example: Associate .png with YourApp.Image
+    
+    
     let (key, _) = classes.create_subkey(".png")?;
     key.set_value("", &"Luminix.Image")?;
 
     let (image_key, _) = classes.create_subkey("Luminix.Image\\shell\\open\\command")?;
     image_key.set_value("", &exe_str)?;
     
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+pub fn register_file_association() -> anyhow::Result<()> {
+    todo!();
     Ok(())
 }
