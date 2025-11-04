@@ -23,7 +23,7 @@ use winit::window::Icon;
 
 pub struct SettingsWindow {
     pub state: State,
-    configurable_settings: ConfigurableSettings,
+    pub configurable_settings: ConfigurableSettings,
     pub ctx: Context,
     pub window: winit::window::Window,
     // WGPU components
@@ -63,17 +63,6 @@ impl Action {
             Action::None => {Ok(())}
             Action::Command(shell_command) => {
                 shell_command.execute().map_err(RunActionError::from)
-            }
-        }
-    }
-    pub fn run_action_check(&mut self) /*-> Result<(), RunActionError>*/ {
-        match self {
-            Action::None => {}
-            Action::Command(shell_command) => {
-                if let Err(error) = shell_command.execute() {
-                    dbg!(&error);
-                    shell_command.1 = Some(error);
-                }
             }
         }
     }

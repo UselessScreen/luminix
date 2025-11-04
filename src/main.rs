@@ -18,7 +18,7 @@ use photon_rs::PhotonImage;
 use softbuffer::{Context, Surface};
 use std::io::BufReader;
 use std::num::NonZeroU32;
-use std::ops::Div;
+use std::ops::{Deref, Div};
 use std::time::{Duration, Instant};
 use std::{env, time};
 use winit::application::ApplicationHandler;
@@ -563,6 +563,12 @@ impl ApplicationHandler for App {
                             } else if Some(code) == settings_window.get_settings().keys.prev_frame.get_keycode() && self.gif_frames.is_some() && event_loop.control_flow() == ControlFlow::Wait {
                                 // Paused
                                 self.gif_prev_frame(event_loop, false,);
+                            }
+                            // actions
+                            for (action, key) in self.settings_window.as_ref().unwrap().configurable_settings.actions.iter().zip(self.settings_window.as_ref().unwrap().configurable_settings.keys.actions.iter()) {
+                                if Some(code) == key.get_keycode() {
+                                    let _ = action.run_action();
+                                }
                             }
                         }
                     }
