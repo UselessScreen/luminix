@@ -1,10 +1,10 @@
-#![cfg_attr(
-    all(
-        target_os = "windows",
-        not(debug_assertions),
-    ),
-    windows_subsystem = "windows"
-)]
+// #![cfg_attr(
+//     all(
+//         target_os = "windows",
+//         not(debug_assertions),
+//     ),
+//     windows_subsystem = "windows"
+// )]
 mod settings_window;
 mod register_file_association;
 mod errors;
@@ -191,7 +191,7 @@ fn pad_img(img: PhotonImage, new_size: Size) -> PhotonImage {
     
     
 
-    pad_img_sides(img, pad_left, pad_right, pad_top, pad_bottom)
+    pad_img_sides(&img, pad_left, pad_right, pad_top, pad_bottom)
 }
 
 /// Applies panning to an image based on the provided panning data.
@@ -263,36 +263,35 @@ fn pan_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
     let pan_math_time = time::Instant::now();
 
 
-    let cropped_img = fast_crop(img, pos_x, pos_y, neg_x, neg_y);
+    let cropped_img = fast_crop(&img, pos_x, pos_y, neg_x, neg_y);
     println!("|   |   Pan crop time: {:?}", pan_math_time.elapsed());
     let pan_math_time = time::Instant::now();
 
     // let cropped_img = photon_rs::transform::crop(img, neg_x, neg_y, pos_x, pos_y);
 
-    let padded_cropped_img = pad_img_sides(cropped_img, pad_left, pad_right, pad_top, pad_bottom);
+    let padded_cropped_img = pad_img_sides(&cropped_img, pad_left, pad_right, pad_top, pad_bottom);
     println!("|   |   Pan pad time: {:?}", pan_math_time.elapsed());
 
     println!("|  Pan time: {:?}", pan_time.elapsed());
     padded_cropped_img
 }
 
-fn fast_crop(img: PhotonImage, pos_x: u32, pos_y: u32, neg_x: u32, neg_y: u32) -> PhotonImage {
+fn fast_crop(img: &PhotonImage, pos_x: u32, pos_y: u32, neg_x: u32, neg_y: u32) -> PhotonImage {
     let new_img_size = Size {
         width: pos_x - neg_x,
         height: pos_y - neg_y,
     };
-
-    let dyn_img = photon_rs::helpers::dyn_image_from_raw(&img);
-    let src_img = Image::from_vec_u8(img.get_width(), img.get_height(), dyn_img.into_bytes(), PixelType::U8x4).expect("aasdsad");
+    let dyn_img = photon_rs::helpers::dyn_image_from_raw(img);
+    let src_img = Image::from_vec_u8(dyn_img.width(), dyn_img.height(), dyn_img.into_bytes(), PixelType::U8x4).expect("aasdsad");
     let mut dst_image = Image::new(
         new_img_size.width,
         new_img_size.height,
-        src_img.pixel_type(),
+        PixelType::U8x4,
     );
 
     let mut resizer = Resizer::new();
 
-    resizer.resize(&src_img, &mut dst_image, &ResizeOptions::new().resize_alg(ResizeAlg::Nearest).crop(neg_x as _, neg_y as _, new_img_size.width as _, new_img_size.height as _)).unwrap();
+    resizer.resize(&src_img, &mut dst_image, &ResizeOptions::new().resize_alg(ResizeAlg::Nearest).crop(neg_x.into(), neg_y.into(), new_img_size.width.into(), new_img_size.height.into())).unwrap();
 
     let width = dst_image.width();
     let height = dst_image.height();
@@ -301,59 +300,45 @@ fn fast_crop(img: PhotonImage, pos_x: u32, pos_y: u32, neg_x: u32, neg_y: u32) -
     PhotonImage::new(dst_image.into_vec(), width, height)
 }
 
-fn pad_img_sides (img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32, pad_bottom: u32) -> PhotonImage {
-    // old_code
-    // let padded_cropped_img =
-    //     padding_left(
-    //         &padding_right(
-    //             &padding_bottom(
-    //                 &padding_top(
-    //                     &img,
-    //                     pad_top, rgba_transparent_generator()),
-    //                 pad_bottom, rgba_transparent_generator()),
-    //             pad_right, rgba_transparent_generator()),
-    //         pad_left, rgba_transparent_generator());
-    // end old code
-    // new code
-    use rayon::prelude::*;
-    use std::sync::{Arc, Mutex};
-
+fn pad_img_sides (img: &PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32, pad_bottom: u32) -> PhotonImage {
     let new_width = img.get_width() + pad_left + pad_right;
     let new_height = img.get_height() + pad_top + pad_bottom;
 
     // Create a new buffer filled with transparent pixels
-    let new_buffer = vec![0u8; (new_width * new_height * 4) as usize];
-    
-    // Wrap the buffer in an Arc<Mutex<>> to allow safe parallel modification
-    let buffer = Arc::new(Mutex::new(new_buffer));
+    let mut new_buffer = vec![0u8; (new_width * new_height * 4) as usize];
     
     // Copy the source image pixels into the correct position in the new buffer
     let src_pixels = img.get_raw_pixels();
     let src_width = img.get_width();
     let src_height = img.get_height();
-
-    // Process rows in parallel
-    (0..src_height).into_par_iter().for_each(|y| {
+    
+    /*
         let src_row_start = (y * src_width * 4) as usize;
         let src_row_end = src_row_start + (src_width * 4) as usize;
         let dst_row_start = ((y + pad_top) * new_width * 4 + pad_left * 4) as usize;
         let dst_row_end = dst_row_start + (src_width * 4) as usize;
+     */
+    
+    
+    // do math out of loop for optimization
+    let src_width_x4 = src_width * 4;
+    let i_dont_even_know = (4*new_width*pad_top)+(4*pad_left);
+    
+    // Process rows not in parallel
+    (0..src_height).for_each(|y| {
+        let src_row_start = (y * src_width_x4) as usize;
+        let src_row_end = src_row_start + src_width_x4 as usize;
+        // original:         let dst_row_start = ((y + pad_top) * new_width * 4 + pad_left * 4) as usize;
+        let dst_row_start = (4*new_width*y + i_dont_even_know) as usize;
+        let dst_row_end = dst_row_start + src_width_x4 as usize;
         
         // Create a row buffer with the pixels we want to copy
-        let row_data = src_pixels[src_row_start..src_row_end].to_vec();
+        let row_data = &src_pixels[src_row_start..src_row_end];
         
-        // Lock the buffer only for the time needed to update it
-        let mut buffer = buffer.lock().unwrap();
-        buffer[dst_row_start..dst_row_end].copy_from_slice(&row_data);
+        new_buffer[dst_row_start..dst_row_end].copy_from_slice(row_data);
     });
 
-    // Unwrap the Arc<Mutex<>> to get back our buffer
-    let final_buffer = Arc::try_unwrap(buffer)
-        .expect("Failed to unwrap Arc")
-        .into_inner()
-        .expect("Failed to unwrap Mutex");
-
-    PhotonImage::new(final_buffer, new_width, new_height)
+    PhotonImage::new(new_buffer, new_width, new_height)
 }
 
 /// Applies zooming to an image based on the provided panning data.
@@ -365,14 +350,15 @@ fn pad_img_sides (img: PhotonImage, pad_left: u32, pad_right: u32, pad_top: u32,
 /// # Returns
 /// A new `PhotonImage` instance with the applied zoom.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
-fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
+fn zoom_img(img: &PhotonImage, panning_data: PanningData) -> PhotonImage {
     let zoom_level = panning_data.zoom_level;
     
     // zoom level should be so that 10 zooms gets you to around one pixel
+    let width = img.get_width();
     let zoom_level_multiplier = 
-        if img.get_height() > img.get_width() {
+        if img.get_height() > width {
             // use width
-            img.get_width() as f32 / 10_f32
+            width as f32 / 10_f32
         } else {
             // use height
             img.get_height() as f32 / 10_f32
@@ -382,11 +368,7 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
     // dbg!(zoom_constant, zoom_level_multiplier);
     // dbg!(zoom_constant);
     
-    
-    
-    
     // return this
-    
     if zoom_level.is_positive()
     {
         // let pos_x = img.get_width() - zoom_constant;
@@ -401,9 +383,9 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
         // total percent to crop, e.g. 0.3 means remove 30% total (15% per side)
         let crop_ratio = 0.8 * zoom_ratio; // up to 80% total crop
 
-        let aspect = img.get_width() as f32 / img.get_height() as f32;
+        let aspect = width as f32 / img.get_height() as f32;
         
-        let base_crop_width = img.get_width() as f32 * crop_ratio;
+        let base_crop_width = width as f32 * crop_ratio;
         let base_crop_height = img.get_height() as f32 * crop_ratio;
 
         // adjust one dimension to maintain aspect ratio
@@ -414,21 +396,21 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
             (w, h)
         } else {
             // tall image
-            let w = img.get_width() as f32 - base_crop_width;
+            let w = width as f32 - base_crop_width;
             let h = w / aspect;
             (w, h)
         };
 
-        let center_x = img.get_width() as f32 / 2.0;
+        let center_x = width as f32 / 2.0;
         let center_y = img.get_height() as f32 / 2.0;
 
         let x0 = (center_x - crop_width / 2.0).max(0.0);
         let y0 = (center_y - crop_height / 2.0).max(0.0);
 
-        let x1 = (x0 + crop_width).min(img.get_width() as f32);
+        let x1 = (x0 + crop_width).min(width as f32);
         let y1 = (y0 + crop_height).min(img.get_height() as f32);
         
-        fast_crop(img, x1 as u32, y1 as u32, x0 as u32, y0 as u32)
+        fast_crop(&img, x1 as u32, y1 as u32, x0 as u32, y0 as u32)
         
     } else {
         let pad_top = zoom_constant as u32;
@@ -436,7 +418,7 @@ fn zoom_img(img: PhotonImage, panning_data: PanningData) -> PhotonImage {
         let pad_left = zoom_constant as u32;
         let pad_right = zoom_constant as u32;
         // dbg!(pad_top);
-        pad_img_sides(img, pad_left, pad_right, pad_top, pad_bottom)
+        pad_img_sides(&img, pad_left, pad_right, pad_top, pad_bottom)
     }
 }
 
@@ -670,8 +652,6 @@ impl ApplicationHandler for App {
                         height: window_height,
                     };
 
-
-
                     // resize everything
                     if window_width.is_zero() || window_height.is_zero() {
                         return;
@@ -680,16 +660,11 @@ impl ApplicationHandler for App {
 
                     println!("Surface resize time: {:?}", start_time.elapsed());
                     let start_time = Instant::now();
-
-
                     let start_img = self.img.as_ref().unwrap().clone();
-
-
-
-
+                    
                     let middle_img = if self.panning_data.zoom_level <= 0 {
                         // if zoomed out, perform the zooming then the panning, otherwise, do panning then zooming
-                        let zoomed_img = zoom_img(start_img, self.panning_data); // zoom image
+                        let zoomed_img = zoom_img(&start_img, self.panning_data); // zoom image
                         // println!("zoom - pan");
 
                         pan_img(zoomed_img, self.panning_data) // pan image and return
@@ -699,7 +674,7 @@ impl ApplicationHandler for App {
                         // println!("pan - zoom");
                         // dbg!((zoomed_img.get_width(), zoomed_img.get_height()));
                         // dbg!((panned_img.get_width(), panned_img.get_height()));
-                        zoom_img(panned_img.clone(), self.panning_data) // zoom image
+                        zoom_img(&panned_img.clone(), self.panning_data) // zoom image
                     };
 
                     println!("Zoom and pan time: {:?}", start_time.elapsed());

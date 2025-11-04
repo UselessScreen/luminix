@@ -10,18 +10,17 @@ photon-rs = "0.3.3"
 softbuffer = "0.4.6"
 bytemuck = "1.23.0"
 fraction = "0.15.3"
-fast_image_resize = { version = "5.2.0", features = ["image"] }
-rayon = "1.10.0"
-image = "0.25.6"
+fast_image_resize = { version = "5.3.0", features = ["image"] }
+image = "0.25.8"
 egui = { version = "0.32.0", features = ["color-hex"] }
 egui-winit = "0.32.0"
 wgpu = "25.0.2"  
 egui-wgpu = "0.32.0"
 pollster = "0.3"
-egui-keybind = "0.6.0"
+egui-keybind = "0.7.0"
 egui_extras = "0.32.0"
 serde = "1.0.219"
-ron = "0.10.1"
+ron = "0.11.0"
 anyhow = "1.0.98"
 strum = { version = "0.27.2", features = ["derive"] }
 shell-words = "1.1.0"
@@ -34,8 +33,6 @@ winreg = "0.55.0"
 [features]
 default = ["egui/callstack"]
 
-[patch.crates-io]
-egui-keybind = { git = "https://github.com/UselessScreen/egui-keybind.git" } # waiting for PR approval: https://github.com/zeozeozeo/egui-keybind/pull/14
-
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
+
