@@ -1,12 +1,15 @@
+use crate::errors::{CommandExecutionError, RunActionError};
 use crate::register_file_association::register_file_association;
+use derivative::Derivative;
 use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, RichText, Separator, Style, Ui, Vec2, ViewportBuilder};
 use egui_extras::{Column, TableBuilder};
 use egui_keybind::{Bind, Keybind};
 use egui_winit::State;
 use serde::{Deserialize, Serialize};
-use std::fmt::Formatter;
+use std::any::TypeId;
+use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, Range};
 use std::{array, env, fmt};
 use strum::{EnumCount, EnumIter, EnumMessage, IntoEnumIterator};
 use wgpu::{self, Adapter, Device, Instance, Queue, Surface, SurfaceConfiguration};
@@ -16,6 +19,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::KeyCode;
 use winit::platform::windows::{IconExtWindows, WindowExtWindows};
 use winit::window::Icon;
+
 
 pub struct SettingsWindow {
     pub state: State,
@@ -33,26 +37,80 @@ pub struct SettingsWindow {
 }
 
 const ACTION_AMOUNT: usize = 2;
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ConfigurableSettings {
     pub keys: Keys,
     pub actions: [Action; ACTION_AMOUNT],
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, EnumIter)]
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq,Debug, EnumIter)]
 pub enum Action {
     #[default]
     None,
-    Command(String),
+    Command(ShellCommand),
 }
-impl fmt::Display for Action {
+impl Display for Action {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Action::Command(_) => {write!(f, "Command")}
             Action::None => {write!(f, "None")}
         }
     }
+}
+impl Action {
+    pub fn run_action(&self) -> Result<(), RunActionError> {
+        match &self {
+            Action::None => {Ok(())}
+            Action::Command(shell_command) => {
+                shell_command.execute().map_err(RunActionError::from)
+            }
+        }
+    }
+    pub fn run_action_check(&mut self) /*-> Result<(), RunActionError>*/ {
+        match self {
+            Action::None => {}
+            Action::Command(shell_command) => {
+                if let Err(error) = shell_command.execute() {
+                    dbg!(&error);
+                    shell_command.1 = Some(error);
+                }
+            }
+        }
+    }
+}
+#[derive(Serialize, Deserialize, Default, Debug, Derivative)]
+#[derivative(PartialEq, Clone)]
+pub struct ShellCommand(
+    String,
+    #[serde(skip)]
+    #[derivative(PartialEq="ignore",Clone(clone_with="clone_none"))]
+    Option<CommandExecutionError>
+);
+impl egui::TextBuffer for ShellCommand {
+    fn is_mutable(&self) -> bool { true }
+    fn as_str(&self) -> &str { self.0.as_str() }
+    fn insert_text(&mut self, text: &str, char_index: usize) -> usize { self.0.insert_text(text, char_index) }
+    fn delete_char_range(&mut self, char_range: Range<usize>) { self.0.delete_char_range(char_range) }
+    fn type_id(&self) -> TypeId { TypeId::of::<Self>() }
+}
+impl Display for ShellCommand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) }
+}
+impl ShellCommand {
+    fn execute(&self) -> Result<(), CommandExecutionError>{
+        let image_path = env::args().nth(1).expect("THIS IS A BUG! Cannot access 2nd program argument, which is checked for validity at the start of the program.");
+        let commmand_with_replaced_placeholder = self.0.replace("%1", &format!("\"{image_path}\""));
+        let mut split_command = shell_words::split(&commmand_with_replaced_placeholder)?.into_iter();
+        dbg!(split_command.clone());
+        let executable = split_command.nth(0).ok_or(CommandExecutionError::InvalidArgs)?;
+        std::process::Command::new(executable)
+            .args(split_command)
+            .spawn()?;
+        Ok(())
+    }
+}
+fn clone_none<T>(_: &Option<T>) -> Option<T> {
+    None
 }
 
 #[derive(Clone, Serialize, Deserialize, EnumIter, EnumCount, EnumMessage)]
@@ -126,7 +184,7 @@ impl Bind for KeyWrapper {
     fn format(&self, _names: &ModifierNames<'_>, _is_mac: bool) -> String {
         match self.key_code {
             None => String::from("None"),
-            Some(key) => {format!("{:?}", key)}
+            Some(key) => {format!("{key:?}")}
         }
     }
 
@@ -193,7 +251,7 @@ impl SettingsWindow {
         // settings_window.window.set_visible(true);
         settings_window
     }
-    
+    // idk chatgpt wrote this part bc i tried and failed if anyone even sees this and wants to fix it please do i'm too scared to even look at it
     async fn initialize_wgpu(&mut self) {
         if self.instance.is_none() {
             return;
@@ -419,7 +477,12 @@ impl SettingsWindow {
                 // Action 1
                 let row_heights: Vec<f32> = self.configurable_settings.actions.iter().map(|action| {
                    match action {
-                       Action::Command(_) => {40.0}
+                       Action::Command(command) => {
+                           40.0 + match command.1 {
+                               None => 0.0,
+                               Some(_) => 20.0,
+                           }
+                       }
                        Action::None => {20.0}
                    }
                 }).collect();
@@ -447,8 +510,9 @@ impl SettingsWindow {
                             });
                             
                             // if Command
-                            if let Action::Command(command) = &mut self.configurable_settings.actions[row_index] {
-                                // help tooltip formatting
+                            let action = &mut self.configurable_settings.actions[row_index];
+                            if let Action::Command(command) = action {
+                                // help tooltip
                                 let default_style = Style::default();
                                 let mut layout_job = egui::text::LayoutJob::default();
                                 RichText::new("Use ")
@@ -460,12 +524,23 @@ impl SettingsWindow {
                                     .append_to(&mut layout_job, &default_style, egui::FontSelection::default(), Align::LEFT);
                                 // command selection menu
                                 ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
+                                    // actual textedit
                                     egui::TextEdit::singleline(command).code_editor().show(ui).response.on_hover_text(layout_job);
-                                    ui.button("Test command")
+                                    let test_button = ui.button("Test command");
+                                    if test_button.clicked() {
+                                        if let Err(error) = command.execute() {
+                                            dbg!(&error);
+                                            command.1 = Some(error);
+                                        } else {
+                                            command.1 = None;
+                                        }
+                                    }
                                 });
+                                if let Some(error_message) = &command.1 {
+                                    ui.label(error_message.to_string());
+                                }
                             }
                         });
-                        
                     });
                 });
             });
@@ -506,8 +581,8 @@ impl SettingsWindow {
             });
     }
 
-    pub fn get_settings(&self) -> ConfigurableSettings {
-        self.configurable_settings.clone()
+    pub fn get_settings(&self) -> &ConfigurableSettings {
+        &self.configurable_settings
     }
     
     fn save_settings(&self) {
@@ -536,7 +611,7 @@ impl SettingsWindow {
         if f.is_err() {
             eprintln!("Failed to load luminix-settings.ron, falling back to default configuration values. Error message: {}", f.unwrap_err());
             return ConfigurableSettings::default()
-        };
+        }
         
         // return
         ron::de::from_reader(f.unwrap()).unwrap_or_else(|e| {
@@ -662,7 +737,7 @@ fn winit_keycode_to_egui(key_code: KeyCode) -> Key {
     }
 }
 #[allow(clippy::too_many_lines)]
-fn egui_key_to_winit(key: Key) -> winit::keyboard::KeyCode {
+fn egui_key_to_winit(key: Key) -> KeyCode {
     match key {
         // Arrows
         Key::ArrowDown => KeyCode::ArrowDown,

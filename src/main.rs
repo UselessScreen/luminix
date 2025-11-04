@@ -7,6 +7,7 @@
 )]
 mod settings_window;
 mod register_file_association;
+mod errors;
 
 use bytemuck::cast_slice;
 use fast_image_resize::images::Image;
@@ -470,8 +471,6 @@ impl ApplicationHandler for App {
             }).collect();
             println!("this is gif");
             if let Some(first_frame) = photon_frames.first() {
-               
-                
                 let (img_width, img_height) = (first_frame.frame.get_width(), first_frame.frame.get_height());
                 dbg!(img_width, img_height);
                 let window_attributes = Window::default_attributes()
@@ -789,8 +788,7 @@ fn main() {
         eprintln!("Usage: luminix <image_path>");
         return;
     };
-
-    // ControlFlow::Wait 
+    
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App::default();
