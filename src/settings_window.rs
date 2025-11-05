@@ -1,9 +1,10 @@
 use crate::errors::{CommandExecutionError, RunActionError};
 use crate::register_file_association::register_file_association;
 use derivative::Derivative;
-use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, RichText, Separator, Style, Ui, Vec2, ViewportBuilder};
+use egui::{self, hex_color, Align, Context, Key, Layout, RichText, Separator, Style, Ui, Vec2, ViewportBuilder};
 use egui_extras::{Column, TableBuilder};
-use egui_keybind::{Bind, Keybind};
+// TODO: Re-add when egui-keybind supports egui 0.33
+// use egui_keybind::{Bind, Keybind};
 use egui_winit::State;
 use serde::{Deserialize, Serialize};
 use std::any::TypeId;
@@ -163,6 +164,8 @@ impl KeyWrapper {
         KeyWrapper {key_code: None}
     }
 }
+// TODO: Re-add when egui-keybind supports egui 0.33
+/*
 impl Bind for KeyWrapper {
     fn set(&mut self, keyboard: Option<KeyboardShortcut>, _pointer: Option<PointerButton>) {
         if let Some(keyboard) = keyboard {
@@ -184,6 +187,7 @@ impl Bind for KeyWrapper {
         }
     }
 }
+*/
 impl Default for ConfigurableSettings {
     fn default() -> Self {
         ConfigurableSettings {
@@ -218,7 +222,12 @@ impl SettingsWindow {
             None                   // max_texture_side: None means use egui default
         );
         
-        let instance_descriptor = wgpu::InstanceDescriptor  { backends: wgpu::Backends::all(), ..Default::default() };
+        let backends = if cfg!(target_os = "windows") {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let instance_descriptor = wgpu::InstanceDescriptor { backends, ..Default::default() };
         let instance = Some(Instance::new(&instance_descriptor));
         
         let mut settings_window = Self {
@@ -263,15 +272,16 @@ impl SettingsWindow {
             force_fallback_adapter: false,
         }).await.expect("Failed to find an appropriate adapter");
         
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            },
-        ).await.expect("Failed to create device");
+            let (device, queue) = adapter.request_device(
+                &wgpu::DeviceDescriptor {
+                    label: None,
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: Default::default(),
+                    experimental_features: Default::default(),
+                },
+            ).await.expect("Failed to create device");
         
         let size = self.window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -293,9 +303,12 @@ impl SettingsWindow {
         let egui_rpass = egui_wgpu::Renderer::new(
             &device, 
             *format,
-            None, 
-            1,
-            false
+            egui_wgpu::RendererOptions {
+                depth_stencil_format: None,
+                msaa_samples: 1,
+                dithering: true,
+                predictable_texture_filtering: false,
+            },
         );
         
         self.surface = Some(surface);
@@ -434,6 +447,7 @@ impl SettingsWindow {
                             }),
                             store: wgpu::StoreOp::Store,
                         },
+                        depth_slice: None,
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -564,7 +578,9 @@ impl SettingsWindow {
                     });
                     // keybind row
                     row.col(|ui| {
-                        ui.add(Keybind::new(&mut self.configurable_settings.keys[keys_index], row_label).with_reset(KeyWrapper::new_empty()).with_reset_key(Some(Key::Escape)));
+                        // TODO: Re-add when egui-keybind supports egui 0.33
+                        ui.label("(Keybind widget temporarily disabled)");
+                        // ui.add(Keybind::new(&mut self.configurable_settings.keys[keys_index], row_label).with_reset(KeyWrapper::new_empty()).with_reset_key(Some(Key::Escape)));
                     });
                 });
             });
