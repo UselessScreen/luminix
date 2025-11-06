@@ -31,7 +31,7 @@ jobs:
         
         # Check for version bump keywords in commit message
         # Using word boundaries to avoid false positives
-        if echo "$COMMIT_MSG" | grep -iE '\[major\]|breaking[[:space:]]change'; then
+        if echo "$COMMIT_MSG" | grep -iE '\[major\]|breaking[[:space:]]+change'; then
           BUMP_TYPE="major"
         elif echo "$COMMIT_MSG" | grep -iE '\[minor\]|\bfeat\b|\bfeature\b'; then
           BUMP_TYPE="minor"
