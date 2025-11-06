@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    branches: [ "master" ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Get commit message
+      id: commit
+      run: |
+        COMMIT_MSG=$(git log -1 --pretty=%B)
+        echo "message=$COMMIT_MSG" >> $GITHUB_OUTPUT
+        echo "Commit message: $COMMIT_MSG"
+    
+    - name: Determine version bump
+      id: version_bump
+      run: |
+        COMMIT_MSG="${{ steps.commit.outputs.message }}"
+        BUMP_TYPE="none"
+        
+        # Check for version bump keywords in commit message
+        if echo "$COMMIT_MSG" | grep -iE '\[major\]|breaking change'; then
+          BUMP_TYPE="major"
+        elif echo "$COMMIT_MSG" | grep -iE '\[minor\]|feat|feature'; then
+          BUMP_TYPE="minor"
+        elif echo "$COMMIT_MSG" | grep -iE '\[patch\]|fix|bugfix'; then
+          BUMP_TYPE="patch"
+        fi
+        
+        echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+        echo "Version bump type: $BUMP_TYPE"
+    
+    - name: Get current version
+      id: current_version
+      if: steps.version_bump.outputs.bump_type != 'none'
+      run: |
+        VERSION=$(grep -m 1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Current version: $VERSION"
+    
+    - name: Update Cargo.toml version
+      if: steps.version_bump.outputs.bump_type != 'none'
+      uses: lemonxah/cargo_semver_update@v1.0.3
+      with:
+        version_type: ${{ steps.version_bump.outputs.bump_type }}
+    
+    - name: Get new version
+      id: new_version
+      if: steps.version_bump.outputs.bump_type != 'none'
+      run: |
+        VERSION=$(grep -m 1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "New version: $VERSION"
+    
+    - name: Commit version bump
+      if: steps.version_bump.outputs.bump_type != 'none'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add Cargo.toml
+        git commit -m "chore: bump version to ${{ steps.new_version.outputs.version }}"
+        git push
+    
+    - name: Create GitHub Release
+      if: steps.version_bump.outputs.bump_type != 'none'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.new_version.outputs.version }}
+        release_name: Release v${{ steps.new_version.outputs.version }}
+        body: |
+          Version ${{ steps.new_version.outputs.version }}
+          
+          Changes: ${{ steps.commit.outputs.message }}
+        draft: false
+        prerelease: false
