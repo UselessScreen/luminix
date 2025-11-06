@@ -1,10 +1,11 @@
-// #![cfg_attr(
-//     all(
-//         target_os = "windows",
-//         not(debug_assertions),
-//     ),
-//     windows_subsystem = "windows"
-// )]
+#![cfg_attr(
+    all(
+        target_os = "windows",
+        not(debug_assertions),
+    ),
+    windows_subsystem = "windows"
+)]
+use std::borrow::Borrow;
 mod settings_window;
 mod register_file_association;
 mod errors;
@@ -47,7 +48,7 @@ struct App {
 #[derive(Debug, Default, Copy, Clone)]
 struct PanningData {
     panning: bool,
-    pan_offset: PhysicalPosition<i32>,
+    pan_offset: PhysicalPosition<f32>,
     zoom_level: i32,
 }
 
@@ -233,7 +234,7 @@ impl ApplicationHandler for App {
                 WindowEvent::MouseInput {state, button, .. } => {
                     // dbg!(button, state);
 
-                    if button == MouseButton::Middle {
+                    if button == MouseButton::Right {
                         match state {
                             ElementState::Pressed => {
                                 self.panning_data.panning = true;
@@ -266,7 +267,7 @@ impl ApplicationHandler for App {
                     let max_zoom_level = 100;
                     match delta {
                         LineDelta(_, y) => {
-                            if y.is_sign_positive() {
+                            if !y.is_sign_positive() {
                                 if self.panning_data.zoom_level < max_zoom_level {
                                     self.panning_data.zoom_level += 1;
                                 }
@@ -292,16 +293,17 @@ impl ApplicationHandler for App {
                         // adjust panning offset
                         let (mouse_pos_x, mouse_pos_y): (i32, i32) = position.into();
 
-                        let (window_size_x, window_size_y): (u32, u32) = window_ref.inner_size().into();
+                        let (window_size_x, window_size_y): (i32, i32) = window_ref.inner_size().into();
 
                         // Negate offset so moving mouse right moves image right
-                        let offset_x = -( mouse_pos_x - (window_size_x as i32)/2);
-                        let offset_y = -(mouse_pos_y - (window_size_y as i32)/2);
+                        let pan_multiplier = self.settings_window.as_ref().unwrap().configurable_settings.pan_multiplier;
+                        let offset_x = -( mouse_pos_x - window_size_x/2)as f32 * pan_multiplier;
+                        let offset_y = -( mouse_pos_y - window_size_y/2)as f32 * pan_multiplier;
                         // if applying offset will make offset greater than image size, don't apply offset
-                        if (self.panning_data.pan_offset.x + offset_x).unsigned_abs() < self.img_width {
+                        if (self.panning_data.pan_offset.x + offset_x).abs() < self.img_width as f32{
                             self.panning_data.pan_offset.x += offset_x;
                         }
-                        if (self.panning_data.pan_offset.y + offset_y).unsigned_abs() < self.img_height {
+                        if (self.panning_data.pan_offset.y + offset_y).abs() < self.img_height as f32 {
                             self.panning_data.pan_offset.y += offset_y;
                         }
 
@@ -318,7 +320,7 @@ impl ApplicationHandler for App {
                 WindowEvent::RedrawRequested => {
                     if let Some(renderer) = &mut self.renderer {
                         match renderer.render() {
-                            Ok(_) => {}
+                            Ok(()) => {}
                             Err(wgpu::SurfaceError::Lost) => {
                                 let size = window_ref.inner_size();
                                 renderer.resize(size);
@@ -327,7 +329,7 @@ impl ApplicationHandler for App {
                                 eprintln!("Out of memory!");
                                 event_loop.exit();
                             }
-                            Err(e) => eprintln!("Render error: {:?}", e),
+                            Err(e) => eprintln!("Render error: {e:?}"),
                         }
                     }
                 }

@@ -454,10 +454,10 @@ impl WgpuRenderer {
                 self.update_uniforms(image_aspect);
             }
 
-    pub fn set_pan(&mut self, pan_offset: PhysicalPosition<i32>, image_width: u32, image_height: u32) {
+    pub fn set_pan(&mut self, pan_offset: PhysicalPosition<f32>, image_width: u32, image_height: u32) {
         // Normalize pan offset to -1.0 to 1.0 range based on image size
-        let norm_x = pan_offset.x as f32 / image_width as f32;
-        let norm_y = pan_offset.y as f32 / image_height as f32;
+        let norm_x = pan_offset.x / image_width as f32;
+        let norm_y = pan_offset.y / image_height as f32;
 
         self.pan_offset = PhysicalPosition::new(norm_x, norm_y);
 

@@ -1,10 +1,9 @@
 use crate::errors::{CommandExecutionError, RunActionError};
 use crate::register_file_association::register_file_association;
 use derivative::Derivative;
-use egui::{self, hex_color, Align, Context, Key, Layout, RichText, Separator, Style, Ui, Vec2, ViewportBuilder};
+use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, RichText, Separator, SliderClamping, Style, Ui, Vec2, ViewportBuilder, Widget};
 use egui_extras::{Column, TableBuilder};
-// TODO: Re-add when egui-keybind supports egui 0.33
-// use egui_keybind::{Bind, Keybind};
+use egui_keybind::{Bind, Keybind};
 use egui_winit::State;
 use serde::{Deserialize, Serialize};
 use std::any::TypeId;
@@ -42,6 +41,7 @@ const ACTION_AMOUNT: usize = 2;
 pub struct ConfigurableSettings {
     pub keys: Keys,
     pub actions: [Action; ACTION_AMOUNT],
+    pub pan_multiplier: f32
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq,Debug, EnumIter)]
@@ -164,8 +164,6 @@ impl KeyWrapper {
         KeyWrapper {key_code: None}
     }
 }
-// TODO: Re-add when egui-keybind supports egui 0.33
-/*
 impl Bind for KeyWrapper {
     fn set(&mut self, keyboard: Option<KeyboardShortcut>, _pointer: Option<PointerButton>) {
         if let Some(keyboard) = keyboard {
@@ -187,7 +185,6 @@ impl Bind for KeyWrapper {
         }
     }
 }
-*/
 impl Default for ConfigurableSettings {
     fn default() -> Self {
         ConfigurableSettings {
@@ -198,7 +195,8 @@ impl Default for ConfigurableSettings {
                 prev_frame: KeyWrapper::new(KeyCode::Comma),
                 actions: array::from_fn(|_| KeyWrapper::new_empty()),
             },
-            actions: array::from_fn(|_| Action::default())
+            actions: array::from_fn(|_| Action::default()),
+            pan_multiplier: 1.0,
         }
     }
 }
@@ -373,7 +371,15 @@ impl SettingsWindow {
                             self.action_table(ui);
                         });
                 });
-                
+                ui.add_space(5.0);
+                ui.group(|ui| {
+                    egui::CollapsingHeader::new(RichText::new("Settings").heading())
+                        .default_open(true)
+                        .show_unindented(ui, |ui| {
+                            ui.add(Separator::default().grow(6.0));
+                            self.misc_settings(ui);
+                        });
+                });
                 ui.add_space(10.0);
                 
                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
@@ -467,6 +473,15 @@ impl SettingsWindow {
                 egui_rpass.free_texture(id);
             }
         }
+    }
+    
+    fn misc_settings(&mut self, ui:&mut Ui) {
+        ui.style_mut().spacing.slider_width = ui.available_size_before_wrap().x-50.0;
+        egui::widgets::Slider::new(&mut self.configurable_settings.pan_multiplier, -5.0..=5.0)
+            .step_by(0.02)
+            .drag_value_speed(0.001)
+            .clamping(SliderClamping::Never)
+            .ui(ui);
     }
     
     fn action_table(&mut self, ui: &mut Ui) {
@@ -578,9 +593,7 @@ impl SettingsWindow {
                     });
                     // keybind row
                     row.col(|ui| {
-                        // TODO: Re-add when egui-keybind supports egui 0.33
-                        ui.label("(Keybind widget temporarily disabled)");
-                        // ui.add(Keybind::new(&mut self.configurable_settings.keys[keys_index], row_label).with_reset(KeyWrapper::new_empty()).with_reset_key(Some(Key::Escape)));
+                        ui.add(Keybind::new(&mut self.configurable_settings.keys[keys_index], row_label).with_reset(KeyWrapper::new_empty()).with_reset_key(Some(Key::Escape)));
                     });
                 });
             });
