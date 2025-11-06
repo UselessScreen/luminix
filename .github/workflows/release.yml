@@ -30,11 +30,12 @@ jobs:
         BUMP_TYPE="none"
         
         # Check for version bump keywords in commit message
-        if echo "$COMMIT_MSG" | grep -iE '\[major\]|breaking change'; then
+        # Using word boundaries to avoid false positives
+        if echo "$COMMIT_MSG" | grep -iE '\[major\]|breaking[[:space:]]change'; then
           BUMP_TYPE="major"
-        elif echo "$COMMIT_MSG" | grep -iE '\[minor\]|feat|feature'; then
+        elif echo "$COMMIT_MSG" | grep -iE '\[minor\]|\bfeat\b|\bfeature\b'; then
           BUMP_TYPE="minor"
-        elif echo "$COMMIT_MSG" | grep -iE '\[patch\]|fix|bugfix'; then
+        elif echo "$COMMIT_MSG" | grep -iE '\[patch\]|\bfix\b|\bbugfix\b'; then
           BUMP_TYPE="patch"
         fi
         
@@ -45,7 +46,7 @@ jobs:
       id: current_version
       if: steps.version_bump.outputs.bump_type != 'none'
       run: |
-        VERSION=$(grep -m 1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+        VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Current version: $VERSION"
     
@@ -59,7 +60,7 @@ jobs:
       id: new_version
       if: steps.version_bump.outputs.bump_type != 'none'
       run: |
-        VERSION=$(grep -m 1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+        VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "New version: $VERSION"
     
@@ -80,7 +81,7 @@ jobs:
     
     - name: Create GitHub Release
       if: steps.version_bump.outputs.bump_type != 'none'
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v2.2.0
       with:
         tag_name: v${{ steps.new_version.outputs.version }}
         name: Release v${{ steps.new_version.outputs.version }}
