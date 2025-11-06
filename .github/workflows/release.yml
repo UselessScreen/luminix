@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    branches: [ "master" ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.new_version.outputs.version }}
+      commit_message: ${{ steps.commit.outputs.message }}
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Get commit message
+      id: commit
+      run: |
+        COMMIT_MSG=$(git log -1 --pretty=%B)
+        echo "message=$COMMIT_MSG" >> $GITHUB_OUTPUT
+        echo "Commit message: $COMMIT_MSG"
+    
+    - name: Determine version bump
+      id: version_bump
+      run: |
+        COMMIT_MSG="${{ steps.commit.outputs.message }}"
+        BUMP_TYPE="patch"
+        
+        if echo "$COMMIT_MSG" | grep -i '\[major\]'; then
+          BUMP_TYPE="major"
+        elif echo "$COMMIT_MSG" | grep -i '\[minor\]'; then
+          BUMP_TYPE="minor"
+        fi
+        
+        echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+        echo "Version bump type: $BUMP_TYPE"
+    
+    - name: Get current version
+      id: current_version
+      run: |
+        VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Current version: $VERSION"
+    
+    - name: Update Cargo.toml version
+      uses: lemonxah/cargo_semver_update@v1.0.3
+      with:
+        version_type: ${{ steps.version_bump.outputs.bump_type }}
+    
+    - name: Get new version
+      id: new_version
+      run: |
+        VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "New version: $VERSION"
+    
+    - name: Commit version bump
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add Cargo.toml
+        git commit -m "chore: bump version to ${{ steps.new_version.outputs.version }}"
+        git push
+    
+    - name: Create tag
+      run: |
+        git tag v${{ steps.new_version.outputs.version }}
+        git push origin v${{ steps.new_version.outputs.version }}
+  
+  build-windows:
+    needs: release
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: v${{ needs.release.outputs.version }}
+    
+    - name: Build Windows binary
+      run: |
+        cargo build --release
+    
+    - name: Upload Windows artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: luminix-windows
+        path: target/release/luminix.exe
+  
+  build-linux:
+    needs: [release, build-windows]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: v${{ needs.release.outputs.version }}
+    
+    - name: Build Linux binary
+      run: |
+        cargo build --release
+    
+    - name: Upload Linux artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: luminix-linux
+        path: target/release/luminix
+  
+  create-release:
+    needs: [release, build-windows, build-linux]
+    if: always() && needs.build-windows.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Download Windows artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: luminix-windows
+        path: ./artifacts/windows
+    
+    - name: Download Linux artifact
+      if: needs.build-linux.result == 'success'
+      uses: actions/download-artifact@v4
+      with:
+        name: luminix-linux
+        path: ./artifacts/linux
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2.2.0
+      with:
+        tag_name: v${{ needs.release.outputs.version }}
+        name: v${{ needs.release.outputs.version }}
+        body: |
+          Release v${{ needs.release.outputs.version }}
+          
+          ${{ needs.release.outputs.commit_message }}
+        draft: false
+        prerelease: false
+        files: |
+          ./artifacts/windows/luminix.exe
+          ./artifacts/linux/luminix
