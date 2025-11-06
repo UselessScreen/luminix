@@ -1,6 +1,6 @@
 [package]
 name = "luminix"
-version = "0.1.0"
+version = "0.1.5"
 edition = "2021"
 build = "build.rs"
 
@@ -30,9 +30,9 @@ derivative = "2.2.0"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55.0"
 
-[features]
-default = ["egui/callstack"]
-
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
+
+[features]
+default = ["egui/callstack"]
 
