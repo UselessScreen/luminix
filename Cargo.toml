@@ -29,9 +29,6 @@ winreg = "0.55.0"
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
 
-[patch.crates-io]
-egui-keybind = {git = "https://github.com/UselessScreen/egui-keybind.git", rev = "0b733f4"}
-
 [features]
 default = ["egui/callstack"]
 
