@@ -1,6 +1,6 @@
 [package]
 name = "luminix"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 build = "build.rs"
 
@@ -26,14 +26,14 @@ derivative = "2.2.0"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55.0"
 
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
 [patch.crates-io]
 egui-keybind = {git = "https://github.com/UselessScreen/egui-keybind.git", rev = "0b733f4"}
 
 [features]
 default = ["egui/callstack"]
-
-[target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
 
 [profile.release]
 opt-level = 'z'
