@@ -1,7 +1,7 @@
 use crate::errors::{CommandExecutionError, RunActionError};
 use crate::register_file_association::register_file_association;
 use derivative::Derivative;
-use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, RichText, Separator, Style, Ui, Vec2, ViewportBuilder};
+use egui::{self, hex_color, Align, Context, InputState, Key, KeyboardShortcut, Layout, ModifierNames, PointerButton, RichText, Separator, SliderClamping, Style, Ui, Vec2, ViewportBuilder, Widget};
 use egui_extras::{Column, TableBuilder};
 use egui_keybind::{Bind, Keybind};
 use egui_winit::State;
@@ -41,6 +41,7 @@ const ACTION_AMOUNT: usize = 2;
 pub struct ConfigurableSettings {
     pub keys: Keys,
     pub actions: [Action; ACTION_AMOUNT],
+    pub pan_multiplier: f32
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq,Debug, EnumIter)]
@@ -194,7 +195,8 @@ impl Default for ConfigurableSettings {
                 prev_frame: KeyWrapper::new(KeyCode::Comma),
                 actions: array::from_fn(|_| KeyWrapper::new_empty()),
             },
-            actions: array::from_fn(|_| Action::default())
+            actions: array::from_fn(|_| Action::default()),
+            pan_multiplier: 1.0,
         }
     }
 }
@@ -218,7 +220,12 @@ impl SettingsWindow {
             None                   // max_texture_side: None means use egui default
         );
         
-        let instance_descriptor = wgpu::InstanceDescriptor  { backends: wgpu::Backends::all(), ..Default::default() };
+        let backends = if cfg!(target_os = "windows") {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let instance_descriptor = wgpu::InstanceDescriptor { backends, ..Default::default() };
         let instance = Some(Instance::new(&instance_descriptor));
         
         let mut settings_window = Self {
@@ -263,15 +270,16 @@ impl SettingsWindow {
             force_fallback_adapter: false,
         }).await.expect("Failed to find an appropriate adapter");
         
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            },
-        ).await.expect("Failed to create device");
+            let (device, queue) = adapter.request_device(
+                &wgpu::DeviceDescriptor {
+                    label: None,
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: Default::default(),
+                    experimental_features: Default::default(),
+                },
+            ).await.expect("Failed to create device");
         
         let size = self.window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -293,9 +301,12 @@ impl SettingsWindow {
         let egui_rpass = egui_wgpu::Renderer::new(
             &device, 
             *format,
-            None, 
-            1,
-            false
+            egui_wgpu::RendererOptions {
+                depth_stencil_format: None,
+                msaa_samples: 1,
+                dithering: true,
+                predictable_texture_filtering: false,
+            },
         );
         
         self.surface = Some(surface);
@@ -360,7 +371,15 @@ impl SettingsWindow {
                             self.action_table(ui);
                         });
                 });
-                
+                ui.add_space(5.0);
+                ui.group(|ui| {
+                    egui::CollapsingHeader::new(RichText::new("Settings").heading())
+                        .default_open(true)
+                        .show_unindented(ui, |ui| {
+                            ui.add(Separator::default().grow(6.0));
+                            self.misc_settings(ui);
+                        });
+                });
                 ui.add_space(10.0);
                 
                 ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
@@ -434,6 +453,7 @@ impl SettingsWindow {
                             }),
                             store: wgpu::StoreOp::Store,
                         },
+                        depth_slice: None,
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -453,6 +473,15 @@ impl SettingsWindow {
                 egui_rpass.free_texture(id);
             }
         }
+    }
+    
+    fn misc_settings(&mut self, ui:&mut Ui) {
+        ui.style_mut().spacing.slider_width = ui.available_size_before_wrap().x-50.0;
+        egui::widgets::Slider::new(&mut self.configurable_settings.pan_multiplier, -5.0..=5.0)
+            .step_by(0.02)
+            .drag_value_speed(0.001)
+            .clamping(SliderClamping::Never)
+            .ui(ui);
     }
     
     fn action_table(&mut self, ui: &mut Ui) {
