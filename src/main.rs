@@ -5,7 +5,6 @@
     ),
     windows_subsystem = "windows"
 )]
-use std::borrow::Borrow;
 mod settings_window;
 mod register_file_association;
 mod errors;
@@ -23,6 +22,7 @@ use winit::event::MouseScrollDelta::LineDelta;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
+#[cfg(target_os = "windows")]
 use winit::platform::windows::{BackdropType, IconExtWindows, WindowAttributesExtWindows};
 use winit::window::{Icon, Window, WindowId};
 
@@ -77,11 +77,24 @@ impl ApplicationHandler for App {
     }
     
     // init function
+    #[allow(clippy::too_many_lines)]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // get args
         let args: Vec<String> = env::args().collect();
         let image_path = &args[1];
         dbg!(image_path);
+        // load icon if on linux
+        let _icon_width: u16; let _icon_height: u16; let _icon_image_bytes: &[u8];
+        #[cfg(target_os = "linux")]
+        {
+            let icon_raw_bytes = include_bytes!("../luminix_icon.tga");
+            debug_assert_eq!(icon_raw_bytes[0x00], 0x00, "icon should not have image identification field");
+            debug_assert_eq!(icon_raw_bytes[0x01], 0x00, "icon should not have color map");
+            debug_assert_eq!(icon_raw_bytes[0x02], 0x02, "icon should be of format unmapped RGBA");
+            _icon_width = u16::from_le_bytes(icon_raw_bytes[12..=13].try_into().unwrap());
+            _icon_height = u16::from_le_bytes(icon_raw_bytes[14..=15].try_into().unwrap());
+            _icon_image_bytes = &icon_raw_bytes[18..];
+        }
         // loading image -- load image with image crate
         let img_reader = image::ImageReader::open(image_path).unwrap();
         let format = img_reader.with_guessed_format().unwrap().format().unwrap();
@@ -105,6 +118,7 @@ impl ApplicationHandler for App {
             if let Some(first_frame) = gif_frames.first() {
                 let (img_width, img_height) = (first_frame.width, first_frame.height);
                 dbg!(img_width, img_height);
+                #[cfg(target_os = "windows")]
                 let window_attributes = Window::default_attributes()
                     .with_min_inner_size(LogicalSize::new(img_width, img_height))
                     .with_inner_size(LogicalSize::new(img_width, img_height))
@@ -112,7 +126,16 @@ impl ApplicationHandler for App {
                     .with_transparent(true)
                     .with_title(format!("luminix ({image_path})"))
                     .with_window_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok())
+                    .with_taskbar_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok())
                     .with_system_backdrop(BackdropType::TransientWindow);
+                #[cfg(target_os = "linux")]
+                let window_attributes = Window::default_attributes()
+                    .with_min_inner_size(LogicalSize::new(img_width, img_height))
+                    .with_inner_size(LogicalSize::new(img_width, img_height))
+                    .with_active(true)
+                    .with_transparent(true)
+                    .with_title(format!("luminix ({image_path})"))
+                    .with_window_icon(Icon::from_rgba(_icon_image_bytes.to_vec(), _icon_width.into(), _icon_height.into()).ok());
                 let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
                 
                 // Initialize wgpu renderer
@@ -143,19 +166,29 @@ impl ApplicationHandler for App {
         let (img_width, img_height) = rgba_img.dimensions();
         let rgba_data = rgba_img.into_raw();
         
-        println!("Loading: {}, {}x{}", image_path, img_width, img_height);
+        println!("Loading: {image_path}, {img_width}x{img_height}");
         
         dbg!(img_width, img_height);
         
         // creating window
+        #[cfg(target_os = "windows")]
         let window_attributes = Window::default_attributes()
             .with_min_inner_size(LogicalSize::new(img_width, img_height))
             .with_inner_size(LogicalSize::new(img_width, img_height))
             .with_active(true)
             .with_transparent(true)
             .with_title(format!("luminix ({image_path})"))
+            .with_taskbar_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok())
             .with_window_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok())
             .with_system_backdrop(BackdropType::TransientWindow);
+        #[cfg(target_os = "linux")]
+        let window_attributes = Window::default_attributes()
+            .with_min_inner_size(LogicalSize::new(img_width, img_height))
+            .with_inner_size(LogicalSize::new(img_width, img_height))
+            .with_active(true)
+            .with_transparent(true)
+            .with_title(format!("luminix ({image_path})"))
+            .with_window_icon(Icon::from_rgba(_icon_image_bytes.to_vec(), _icon_width.into(), _icon_height.into()).ok());
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
         
         // Initialize wgpu renderer

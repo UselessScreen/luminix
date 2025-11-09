@@ -14,12 +14,12 @@ use std::{array, env, fmt};
 use strum::{EnumCount, EnumIter, EnumMessage, IntoEnumIterator};
 use wgpu::{self, Adapter, Device, Instance, Queue, Surface, SurfaceConfiguration};
 use winit::dpi::PhysicalSize;
+use winit::window::Icon;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::KeyCode;
+#[cfg(target_os = "windows")]
 use winit::platform::windows::{IconExtWindows, WindowExtWindows};
-use winit::window::Icon;
-
 
 pub struct SettingsWindow {
     pub state: State,
@@ -207,10 +207,14 @@ impl SettingsWindow {
         
         let viewport_builder = ViewportBuilder::default().with_title("Luminix Settings").with_active(false).with_visible(false).with_min_inner_size(Vec2::new(256_f32, 226_f32)); // .with_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok())
         let window = egui_winit::create_window(&ctx, event_loop, &viewport_builder).expect("Error creating settings window");
-        window.set_window_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok());
-        let egui_bg_color = Some(winit::platform::windows::Color::from_rgb(0x1b, 0x1b, 0x1b));
-        window.set_border_color(egui_bg_color);
-        window.set_title_background_color(egui_bg_color);
+        #[cfg(target_os = "windows")]
+        {
+            window.set_window_icon(Icon::from_resource(1, Some(PhysicalSize::new(128, 128))).ok());
+            let egui_bg_color = Some(winit::platform::windows::Color::from_rgb(0x1b, 0x1b, 0x1b));
+            window.set_border_color(egui_bg_color);
+            window.set_title_background_color(egui_bg_color);
+        }
+        // TODO: set icon for linux
         let state = State::new(
             ctx.clone(),
             ctx.viewport_id(),
