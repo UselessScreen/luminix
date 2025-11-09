@@ -4,7 +4,7 @@ extern crate winres;
 #[cfg(windows)]
 fn main() {
     let mut res = winres::WindowsResource::new();
-    res.set_icon("luminix_icon.ico");
+    res.set_icon("resources/luminix_icon.ico");
     res.compile().unwrap();
 }
 

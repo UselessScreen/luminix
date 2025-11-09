@@ -88,12 +88,16 @@ jobs:
     - name: Build Windows binary
       run: |
         cargo build --release
+
+    - name: Rename Windows binary
+      run: |
+        ren "target/release/luminix.exe" "luminix-${{ needs.release.outputs.version }}-windows-x86_64.exe"
     
     - name: Upload Windows artifact
       uses: actions/upload-artifact@v4
       with:
         name: luminix-windows
-        path: target/release/luminix.exe
+        path: target/release/luminix-${{ needs.release.outputs.version }}-windows-x86_64.exe
   
   build-linux:
     needs: release
@@ -101,6 +105,8 @@ jobs:
     continue-on-error: true
     outputs:
       success: ${{ steps.build.outcome == 'success' }}
+    env:
+      folder_name: luminix-${{ needs.release.outputs.version }}-linux-x86_64
     
     steps:
     - uses: actions/checkout@v4
@@ -110,16 +116,25 @@ jobs:
     
     - name: Build Linux binary
       id: build
-      continue-on-error: true
       run: |
         cargo build --release
+
+    - name: Package linux binary
+      run: |
+        cd target/release
+        mkdir -p folder
+        mv luminix folder/luminix
+        chmod +x folder/luminix
+        cp ../../resources/linux_release/* folder
+        mv folder ${{env.folder_name}}
+        tar -czf ${{env.folder_name}}.tar.gz ${{env.folder_name}}
     
     - name: Upload Linux artifact
       uses: actions/upload-artifact@v4
       if: steps.build.outcome == 'success'
       with:
         name: luminix-linux
-        path: target/release/luminix
+        path: target/release/${{env.folder_name}}.tar.gz
   
   create-release:
     needs: [release, build-windows, build-linux]
@@ -129,18 +144,24 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
-    - name: Download Windows artifact
+    - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
-        name: luminix-windows
-        path: ./artifacts/windows
-    
-    - name: Download Linux artifact
-      if: needs.build-linux.outputs.success == 'true'
-      uses: actions/download-artifact@v4
-      with:
-        name: luminix-linux
-        path: ./artifacts/linux
+        merge-multiple: true
+        path: ./artifacts
+
+    - name: Clean commit message
+      id: clean_msg
+      run: |
+        COMMIT_MSG="${{ needs.release.outputs.commit_message }}"
+        CLEAN_MSG=$(printf '%s' "$COMMIT_MSG" \
+          | sed -e 's/\[major\]//g' -e 's/\[minor\]//g' -e 's/[[:space:]]*$//')
+        CLEAN_MSG=$(printf "%s" "$CLEAN_MSG")
+        echo "clean_message<<EOF" >> $GITHUB_OUTPUT
+        echo "$CLEAN_MSG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -150,11 +171,9 @@ jobs:
         body: |
           Release v${{ needs.release.outputs.version }}
           
-          ${{ needs.release.outputs.commit_message }}
+          ${{ steps.clean_msg.outputs.clean_message }}
         draft: false
         prerelease: false
         fail_on_unmatched_files: false
         files: |
-          ./artifacts/windows/luminix.exe
-          ./artifacts/linux/luminix
-        
+          ./artifacts/*

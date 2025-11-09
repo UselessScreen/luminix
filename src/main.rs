@@ -87,7 +87,7 @@ impl ApplicationHandler for App {
         let _icon_width: u16; let _icon_height: u16; let _icon_image_bytes: &[u8];
         #[cfg(target_os = "linux")]
         {
-            let icon_raw_bytes = include_bytes!("../luminix_icon.tga");
+            let icon_raw_bytes = include_bytes!("../resources/luminix_icon.tga");
             debug_assert_eq!(icon_raw_bytes[0x00], 0x00, "icon should not have image identification field");
             debug_assert_eq!(icon_raw_bytes[0x01], 0x00, "icon should not have color map");
             debug_assert_eq!(icon_raw_bytes[0x02], 0x02, "icon should be of format unmapped RGBA");
